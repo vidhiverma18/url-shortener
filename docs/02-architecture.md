@@ -104,6 +104,7 @@ fails at startup instead of at 3am.
 | Dependency fails | What happens | Why |
 | --- | --- | --- |
 | Redis unreachable | Redirects still work, served from PostgreSQL. Rate limiting stops enforcing. | Availability of the redirect path outranks enforcement. [ADR-005](decisions/ADR-005-rate-limiting.md) records why this is the wrong default for a paid API. |
+| Redis hung rather than down | A circuit breaker opens after 5 consecutive failures and calls are skipped for 5s, then one probe retries. | A timeout bounds one request; only a breaker bounds the pattern. Untreated this cost 412 ms per redirect indefinitely. [ADR-009](decisions/ADR-009-circuit-breaking.md). |
 | PostgreSQL unreachable | **Cached codes still redirect** (302 in ~6 ms). Uncached codes and creation fail with 500. Health reports DOWN. | Existing hot links keep working, which is the property users actually depend on. |
 | Analytics table unwritable | Redirects unaffected; events dropped and counted. | NFR-6, stated as a hard rule. |
 | Process killed | Buffered events lost (bounded by ~1s of traffic). | Accepted. [ADR-004](decisions/ADR-004-async-analytics.md). |
@@ -127,6 +128,26 @@ first attempt failed: with PostgreSQL stopped, a cached redirect returned 500 af
 opened a transaction — taking a pool connection — before the cache was ever consulted. The
 annotation is gone and the drill now behaves as documented. The episode is why
 `ShortLinkResolutionTest` exists.
+
+Those drills all *stopped* a container, which turned out to be the easy half of the question.
+A stopped dependency refuses connections instantly; a hung one accepts the connection and
+never answers, which is what a server under memory pressure or a long GC pause actually looks
+like. Pausing Redis instead collapsed redirect throughput from ~14,000 req/s to 221, at
+412 ms per request, indefinitely — while every response stayed correct, so nothing but a
+latency graph would have shown it. The breaker in ADR-009 restores this to ~15,600 req/s.
+`scripts/spike-test.py` runs the drill so the claim stays checkable rather than remembered.
+
+### Behaviour under a spike
+
+Load shedding happens at four points, deliberately at different layers. The Redis token
+bucket refuses excess *writes* with 429 and a `Retry-After`. The bounded Hikari pool (20
+connections, 3 s timeout) acts as a bulkhead in front of PostgreSQL, queueing rather than
+overwhelming it — 2,000 concurrent cache-miss redirects completed through it with no errors.
+The click buffer sheds *analytics* when full, so a traffic spike degrades measurement rather
+than redirects. The circuit breaker sheds calls to a dependency that has stopped answering.
+
+Redirects are deliberately not rate limited. They are the product, and negative caching
+already prevents a code scanner from becoming database load.
 
 ## What would change at scale
 

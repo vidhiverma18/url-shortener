@@ -59,6 +59,10 @@ shortener:
   negative-cache-ttl: 30s
   rate-limit-burst: 20
   rate-limit-per-minute: 60
+  # Consecutive Redis failures before calls are skipped entirely, and for how long.
+  # Guards against a hung server, which a timeout alone cannot: see ADR-009.
+  cache-circuit-failure-threshold: 5
+  cache-circuit-cooldown: 5s
   security:
     jwt-secret: ${SHORTENER_JWT_SECRET:local-development-signing-key-change-me-please-32b}
     token-ttl: 1h

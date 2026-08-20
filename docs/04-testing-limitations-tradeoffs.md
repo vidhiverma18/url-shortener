@@ -2,7 +2,7 @@
 
 ## Testing approach
 
-74 tests, in two tiers.
+82 tests, in two tiers, plus a repeatable load and failure drill in `scripts/spike-test.py`.
 
 **Unit tests (42)** run with no infrastructure and target the components where a bug is
 silent rather than loud.
@@ -108,6 +108,9 @@ read-modify-write would have let more than 20 through.
 
 | Limitation | Consequence | Why it is acceptable here |
 | --- | --- | --- |
+| Circuit breaker counts consecutive failures, not a sliding window | A dependency failing intermittently at 40% will not trip it | The mode it defends against — a hung server — fails every call, not some ([ADR-009](decisions/ADR-009-circuit-breaking.md)) |
+| Breaker state is not exported as a metric | An operator sees transitions in logs but cannot alert on them cleanly | Should be a gauge before this runs anywhere real |
+| No rate limit on the redirect path | A distributed flood of valid codes is unthrottled | Redirects are the product; negative caching already blunts scanners, and this belongs at the edge |
 | Tokens cannot be revoked before expiry | Disabling a user does not invalidate a token already issued | Price of stateless verification; the 1-hour TTL is the revocation window ([ADR-008](decisions/ADR-008-authentication-and-ownership.md)) |
 | No user self-registration or password rotation | Accounts are seeded or inserted directly | Account lifecycle is a product surface of its own, not a shortener feature |
 | Single shared signing secret | Compromise forges any token; rotation invalidates every live token at once | Asymmetric keys with a JWKS endpoint are the fix when there is more than one verifier |

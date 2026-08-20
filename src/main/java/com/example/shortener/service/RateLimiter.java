@@ -1,6 +1,7 @@
 package com.example.shortener.service;
 
 import com.example.shortener.config.ShortenerProperties;
+import com.example.shortener.resilience.CircuitBreaker;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
@@ -62,12 +63,16 @@ public class RateLimiter {
     private final ObjectProvider<StringRedisTemplate> redisProvider;
     private final ShortenerProperties properties;
     private final DefaultRedisScript<List> script;
+    private final CircuitBreaker breaker;
 
     @SuppressWarnings("unchecked")
-    public RateLimiter(ObjectProvider<StringRedisTemplate> redisProvider, ShortenerProperties properties) {
+    public RateLimiter(ObjectProvider<StringRedisTemplate> redisProvider,
+                       ShortenerProperties properties,
+                       CircuitBreaker redisCircuitBreaker) {
         this.redisProvider = redisProvider;
         this.properties = properties;
         this.script = new DefaultRedisScript<>(TOKEN_BUCKET_SCRIPT, List.class);
+        this.breaker = redisCircuitBreaker;
     }
 
     /** Limits link creation, keyed by the authenticated principal. */
@@ -89,7 +94,9 @@ public class RateLimiter {
 
     private Decision tryAcquire(String bucket, String clientKey, int capacity, double refillPerSec) {
         StringRedisTemplate redis = redisProvider.getIfAvailable();
-        if (redis == null) {
+        // The breaker is shared with the cache, so once a hung Redis is established this
+        // returns immediately instead of paying the timeout again on the write path.
+        if (redis == null || !breaker.allowRequest()) {
             return Decision.allowedWithoutLimiting();
         }
         long ttlSeconds = Math.max(60, (long) Math.ceil(capacity / Math.max(refillPerSec, 0.0001)));
@@ -101,6 +108,7 @@ public class RateLimiter {
                     String.valueOf(refillPerSec),
                     String.valueOf(Instant.now().getEpochSecond()),
                     String.valueOf(ttlSeconds));
+            breaker.recordSuccess();
             if (result == null || result.size() < 2) {
                 return Decision.allowedWithoutLimiting();
             }
@@ -108,6 +116,7 @@ public class RateLimiter {
             long remaining = ((Number) result.get(1)).longValue();
             return new Decision(allowed, remaining, capacity, retryAfterSeconds(refillPerSec));
         } catch (RuntimeException e) {
+            breaker.recordFailure();
             log.warn("Rate limiter unavailable, allowing request: {}", e.toString());
             return Decision.allowedWithoutLimiting();
         }

@@ -122,6 +122,17 @@ address, and inverts the control into a denial-of-service tool: an attacker lock
 account out by deliberately failing to log in as them. Kept address-keyed, with the reason
 in a comment.
 
+**13. "The service already fails open, so a cache outage is handled."** My own summary, and
+the generated resilience review agreed with it. Both were reasoning from the drills that had
+been run, and every one of those drills *stopped* a container. Stopped is the easy case: the
+kernel refuses the connection instantly. Pausing the container instead — alive, accepting
+TCP, never answering — dropped redirect throughput from about 14,000 requests per second to
+221, with every request paying two 200ms timeouts forever. The fix is
+[ADR-009](decisions/ADR-009-circuit-breaking.md). *The lesson is about the test, not the
+code: a passing failure drill had been treated as proof the failure mode was handled, when
+it only proved the easier half of it was. "Is the dependency down" and "is the dependency
+answering" are different questions.*
+
 ## Where AI was most and least useful
 
 **Most:** mechanical breadth. Boilerplate, DTO and mapper code, the Lua token bucket,

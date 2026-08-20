@@ -36,6 +36,33 @@ public class ShortenerProperties {
     @Positive
     private int rateLimitPerMinute = 60;
 
+    /**
+     * Consecutive Redis failures before the breaker opens. Low, because the cost of being
+     * wrong is asymmetric: opening needlessly costs one database read per request, while
+     * staying closed against a hung server costs a full timeout on every request.
+     */
+    @Positive
+    private int cacheCircuitFailureThreshold = 5;
+
+    /** How long Redis is skipped once the breaker opens, before a single probe is admitted. */
+    private Duration cacheCircuitCooldown = Duration.ofSeconds(5);
+
+    public int getCacheCircuitFailureThreshold() {
+        return cacheCircuitFailureThreshold;
+    }
+
+    public void setCacheCircuitFailureThreshold(int cacheCircuitFailureThreshold) {
+        this.cacheCircuitFailureThreshold = cacheCircuitFailureThreshold;
+    }
+
+    public Duration getCacheCircuitCooldown() {
+        return cacheCircuitCooldown;
+    }
+
+    public void setCacheCircuitCooldown(Duration cacheCircuitCooldown) {
+        this.cacheCircuitCooldown = cacheCircuitCooldown;
+    }
+
     private final Security security = new Security();
 
     public Security getSecurity() {

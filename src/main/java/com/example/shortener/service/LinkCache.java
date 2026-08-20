@@ -2,6 +2,7 @@ package com.example.shortener.service;
 
 import com.example.shortener.config.ShortenerProperties;
 import com.example.shortener.domain.ShortLink;
+import com.example.shortener.resilience.CircuitBreaker;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
@@ -39,33 +40,49 @@ public class LinkCache {
 
     private final ObjectProvider<StringRedisTemplate> redisProvider;
     private final ShortenerProperties properties;
+    private final CircuitBreaker breaker;
 
-    public LinkCache(ObjectProvider<StringRedisTemplate> redisProvider, ShortenerProperties properties) {
+    public LinkCache(ObjectProvider<StringRedisTemplate> redisProvider,
+                     ShortenerProperties properties,
+                     CircuitBreaker redisCircuitBreaker) {
         this.redisProvider = redisProvider;
         this.properties = properties;
+        this.breaker = redisCircuitBreaker;
     }
 
     public Optional<CacheEntry> lookup(String code) {
         StringRedisTemplate redis = redisProvider.getIfAvailable();
-        if (redis == null) {
+        if (redis == null || !breaker.allowRequest()) {
+            return Optional.empty();
+        }
+        String value;
+        try {
+            value = redis.opsForValue().get(KEY_PREFIX + code);
+            breaker.recordSuccess();
+        } catch (RuntimeException e) {
+            breaker.recordFailure();
+            log.warn("Cache lookup failed for code {}, falling back to database: {}", code, e.toString());
+            return Optional.empty();
+        }
+
+        // Decoding sits outside the breaker on purpose. A malformed entry means this
+        // service wrote something wrong, and counting that as evidence about Redis's
+        // health would open the breaker for a bug that skipping Redis cannot fix.
+        if (value == null) {
+            return Optional.empty();
+        }
+        if (MISS_SENTINEL.equals(value)) {
+            return Optional.of(CacheEntry.miss());
+        }
+        int separator = value.indexOf(SEPARATOR);
+        if (separator <= 0) {
             return Optional.empty();
         }
         try {
-            String value = redis.opsForValue().get(KEY_PREFIX + code);
-            if (value == null) {
-                return Optional.empty();
-            }
-            if (MISS_SENTINEL.equals(value)) {
-                return Optional.of(CacheEntry.miss());
-            }
-            int separator = value.indexOf(SEPARATOR);
-            if (separator <= 0) {
-                return Optional.empty();
-            }
             long linkId = Long.parseLong(value.substring(0, separator));
             return Optional.of(CacheEntry.hit(linkId, value.substring(separator + 1)));
-        } catch (RuntimeException e) {
-            log.warn("Cache lookup failed for code {}, falling back to database: {}", code, e.toString());
+        } catch (NumberFormatException e) {
+            log.warn("Malformed cache entry for code {}, ignoring", code);
             return Optional.empty();
         }
     }
@@ -95,24 +112,28 @@ public class LinkCache {
      */
     public void evict(String code) {
         StringRedisTemplate redis = redisProvider.getIfAvailable();
-        if (redis == null) {
+        if (redis == null || !breaker.allowRequest()) {
             return;
         }
         try {
             redis.delete(KEY_PREFIX + code);
+            breaker.recordSuccess();
         } catch (RuntimeException e) {
+            breaker.recordFailure();
             log.warn("Cache eviction failed for code {}: {}", code, e.toString());
         }
     }
 
     private void write(String code, String value, Duration ttl) {
         StringRedisTemplate redis = redisProvider.getIfAvailable();
-        if (redis == null) {
+        if (redis == null || !breaker.allowRequest()) {
             return;
         }
         try {
             redis.opsForValue().set(KEY_PREFIX + code, value, ttl);
+            breaker.recordSuccess();
         } catch (RuntimeException e) {
+            breaker.recordFailure();
             log.warn("Cache write failed for code {}: {}", code, e.toString());
         }
     }
