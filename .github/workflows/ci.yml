@@ -22,7 +22,7 @@ jobs:
       # Pinned to 21 deliberately. The project targets 21, and on newer JDKs Mockito's
       # bytecode backend cannot create mocks, which fails the unit tests for reasons that have
       # nothing to do with the code under test.
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '21'
