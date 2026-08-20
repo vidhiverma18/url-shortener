@@ -95,8 +95,9 @@ Full detail, including what is *not* tested, is in
 
 ## What I would do next, in order
 
-1. **Load test the redirect path** and either meet the p99 target or amend it. It is
-   currently an intention with nothing behind it.
+1. **A CI pipeline with dependency scanning and a coverage gate.** Every quality gate here
+   was run by hand. That is honest, and it is not repeatable by anyone else — it closes more
+   audit gaps than any other single item.
 2. **Token revocation**, via a denylist of token identifiers in Redis. Authentication and
    ownership now exist ([ADR-008](decisions/ADR-008-authentication-and-ownership.md)), but
    disabling a user does not stop a token already in flight.

@@ -108,6 +108,10 @@ read-modify-write would have let more than 20 through.
 
 | Limitation | Consequence | Why it is acceptable here |
 | --- | --- | --- |
+| No CI pipeline, dependency scanning, or coverage gate | Every quality gate was run by hand; a known CVE in a transitive dependency would go unnoticed | The single largest gap. Honest, but not repeatable by anyone else |
+| Creates are not idempotent | A client retrying after a timeout silently creates a duplicate link | Measured, not assumed: an identical body returns two different codes. Needs an `Idempotency-Key` header backed by a short-lived Redis reservation |
+| No rollback path, and migrations are forward-only | Rolling back past a migration is not currently safe | Worth stating regardless of whether a pipeline exists |
+| Logs are plain text, and there is no tracing | Correlating a slow redirect across instances is manual | Metrics are exported; structured JSON logs and tracing are the next observability step |
 | Circuit breaker counts consecutive failures, not a sliding window | A dependency failing intermittently at 40% will not trip it | The mode it defends against — a hung server — fails every call, not some ([ADR-009](decisions/ADR-009-circuit-breaking.md)) |
 | Breaker state is not exported as a metric | An operator sees transitions in logs but cannot alert on them cleanly | Should be a gauge before this runs anywhere real |
 | No rate limit on the redirect path | A distributed flood of valid codes is unthrottled | Redirects are the product; negative caching already blunts scanners, and this belongs at the edge |

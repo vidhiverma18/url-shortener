@@ -133,6 +133,14 @@ code: a passing failure drill had been treated as proof the failure mode was han
 it only proved the easier half of it was. "Is the dependency down" and "is the dependency
 answering" are different questions.*
 
+**14. Config that advertised a capability the build could not provide.** `application.yml`
+exposed `prometheus` under the actuator endpoints, and it read as complete — the property is
+real, the spelling is right, and nothing fails at startup. But `micrometer-registry-prometheus`
+was never a dependency, so the endpoint answered 404. *Recorded because of when it would have
+been discovered: not by a test, not at deploy, but by whoever went looking for metrics during
+an incident. Configuration is a claim about the system, and this one was checked only by
+reading it.*
+
 ## Where AI was most and least useful
 
 **Most:** mechanical breadth. Boilerplate, DTO and mapper code, the Lua token bucket,
