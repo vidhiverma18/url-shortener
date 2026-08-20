@@ -2,7 +2,7 @@
 
 ## Testing approach
 
-55 tests, in two tiers.
+67 tests, in two tiers.
 
 **Unit tests (42)** run with no infrastructure and target the components where a bug is
 silent rather than loud.
@@ -17,9 +17,16 @@ silent rather than loud.
   sheds exactly 500 and reports it; a repository that throws abandons the batch rather than
   propagating into the redirect path.
 
-**Integration tests (13)** run the whole application against real PostgreSQL with the
+**Integration tests (23)** run the whole application against real PostgreSQL with the
 production Flyway migrations. They cover the API contract end to end, including the
 degraded paths.
+
+`SecurityIntegrationTest` is deliberately weighted towards the negative cases, because
+anything can be made to work for an authorized caller. It asserts that anonymous and
+tampered-token requests are refused, that the two credential-failure responses are
+*byte-identical* so the login endpoint cannot enumerate usernames, that one user cannot read
+or retire another's link, that ownerless links are administrator-only, and that the public
+redirect stays public.
 
 Two choices there are worth defending:
 
@@ -96,7 +103,9 @@ read-modify-write would have let more than 20 through.
 
 | Limitation | Consequence | Why it is acceptable here |
 | --- | --- | --- |
-| No authentication | Anyone can create links; anyone with a code can read its analytics | A-4. A shallow auth story would be worse than an honest gap |
+| Tokens cannot be revoked before expiry | Disabling a user does not invalidate a token already issued | Price of stateless verification; the 1-hour TTL is the revocation window ([ADR-008](decisions/ADR-008-authentication-and-ownership.md)) |
+| No user self-registration or password rotation | Accounts are seeded or inserted directly | Account lifecycle is a product surface of its own, not a shortener feature |
+| Single shared signing secret | Compromise forges any token; rotation invalidates every live token at once | Asymmetric keys with a JWKS endpoint are the fix when there is more than one verifier |
 | SSRF defence is literal-IP only | A hostname resolving to a private address is not caught | DNS rebinding defeats resolve-time checks; egress rules are the real control ([ADR-006](decisions/ADR-006-url-safety.md)) |
 | No malware or phishing feed | A benign domain that turns hostile keeps resolving | Needs a live reputation service and an async re-check pipeline |
 | Analytics are lossy | Buffered events lost on kill; dropped under overload | Deliberate ([ADR-004](decisions/ADR-004-async-analytics.md)), surfaced in every stats response |

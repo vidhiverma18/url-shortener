@@ -40,6 +40,20 @@
         </dependency>
         <dependency>
             <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-security</artifactId>
+        </dependency>
+        <!--
+          Brings Nimbus JOSE, which supplies both the decoder and the encoder. Using the
+          resource-server starter rather than hand-rolling JWT parsing matters: signature
+          verification, algorithm confusion and claim validation are exactly the places
+          where bespoke JWT code goes wrong.
+        -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-oauth2-resource-server</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-actuator</artifactId>
         </dependency>
         <dependency>

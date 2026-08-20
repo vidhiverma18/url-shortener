@@ -41,6 +41,13 @@ the same token count and all pass — the limiter fails precisely when it is nee
 - IP-based identification is weak. It is trivially bypassed with a pool of addresses, and
   it over-restricts users behind shared NAT. Real enforcement needs authenticated clients,
   which is out of scope per A-4.
+
+**Superseded in part by [ADR-008](ADR-008-authentication-and-ownership.md).** Creation is
+now keyed by the authenticated principal rather than the client address, which removes both
+weaknesses noted above: a pool of IPs no longer bypasses the bucket, and callers behind
+shared NAT no longer share one. The login endpoint keeps an address-keyed bucket, since a
+login attempt has no principal yet — and keying it by the *submitted* username would let an
+attacker lock out a known account simply by failing to log in as them.
 - `X-Forwarded-For` is trusted for its first entry only, and only because this service
   expects to sit behind a load balancer that overwrites it. A client-supplied value is
   spoofable; this is a convenience for correct deployments, not a security control.

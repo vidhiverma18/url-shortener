@@ -51,6 +51,25 @@ abandoned and logged. In neither case does the visitor notice.
 | `RateLimiter` | Token bucket for creation | Atomic via Lua; fails open |
 | `ClickRecorder` | Buffered, batched analytics writes | Sheds load rather than blocking |
 | `VisitorHasher` | Pseudonymous visitor id | Daily-rotating salt, so it cannot track across days |
+| `SecurityConfig` | Stateless JWT filter chain | Default-deny; the redirect is the one public route |
+| `AuthController` / `JwtIssuer` | Credentials → signed bearer token | Brute-force limited; generic failures |
+
+## The trust boundary
+
+The system has two audiences and they need opposite treatment. **Anyone on the internet**
+follows a short link; **an authenticated owner** manages links and reads analytics. So
+`GET /{code}` is public and everything else is default-deny.
+
+Authentication is a signed JWT verified by Spring Security's resource-server filter, with no
+session and no per-request database read. Authorization is scoped to ownership rather than
+role alone: `short_links.created_by` carries the authenticated principal, and a non-owner is
+answered `404` rather than `403` so the response cannot confirm that a code exists.
+Administrators bypass ownership; links predating authentication have no owner and are
+administrator-only. Reasoning in
+[ADR-008](decisions/ADR-008-authentication-and-ownership.md).
+
+The security filter chain sits *in front of* the rate limiter, which is why creation can now
+be throttled per principal instead of per client address.
 
 ## Control flow, in the order that matters
 

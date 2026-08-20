@@ -109,8 +109,8 @@ public class ShortLinkService {
     }
 
     @Transactional
-    public void deactivate(String code) {
-        ShortLink link = links.findByCode(code).orElseThrow(() -> new LinkNotFoundException(code));
+    public void deactivate(String code, Principal principal) {
+        ShortLink link = requireOwned(code, principal);
         link.deactivate();
         links.save(link);
         // Evict after the write so a concurrent read cannot repopulate the cache from
@@ -118,14 +118,32 @@ public class ShortLinkService {
         cache.evict(code);
     }
 
+    /**
+     * Loads a link the caller is entitled to manage.
+     *
+     * <p>A caller who is not the owner gets {@link LinkNotFoundException}, not an access
+     * denial. A 403 would confirm that the code exists, which hands an enumeration attacker
+     * the one bit they cannot otherwise get. This mirrors the choice to return 404 rather
+     * than 410 for expired links (ADR-007).
+     *
+     * <p>Links with no owner predate authentication and are administrator-only, rather than
+     * being adopted by whoever asks for them first.
+     */
     @Transactional(readOnly = true)
-    public ShortLink require(String code) {
-        return links.findByCode(code).orElseThrow(() -> new LinkNotFoundException(code));
+    public ShortLink requireOwned(String code, Principal principal) {
+        ShortLink link = links.findByCode(code).orElseThrow(() -> new LinkNotFoundException(code));
+        if (principal.admin()) {
+            return link;
+        }
+        if (link.getCreatedBy() == null || !link.getCreatedBy().equalsIgnoreCase(principal.username())) {
+            throw new LinkNotFoundException(code);
+        }
+        return link;
     }
 
     @Transactional(readOnly = true)
-    public LinkStats stats(String code, int windowDays) {
-        ShortLink link = require(code);
+    public LinkStats stats(String code, int windowDays, Principal principal) {
+        ShortLink link = requireOwned(code, principal);
         Instant since = Instant.now().minusSeconds(windowDays * 86_400L);
         return new LinkStats(
                 link,
@@ -137,6 +155,10 @@ public class ShortLinkService {
     }
 
     public record Resolution(long linkId, String url, boolean fromCache) {
+    }
+
+    /** The authenticated caller, reduced to what authorization actually needs. */
+    public record Principal(String username, boolean admin) {
     }
 
     public record LinkStats(ShortLink link,

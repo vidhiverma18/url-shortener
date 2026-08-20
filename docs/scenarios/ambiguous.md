@@ -76,6 +76,15 @@ Listed because knowing what to ask is the deliverable when nobody is available t
 4. Should the same URL submitted twice by the same owner return the same code?
 5. Who is allowed to read a link's analytics — anyone with the code, or only its creator?
 
-Question 5 is the sharpest: today, anyone holding a short code can read its full stats.
-That is a deliberate prototype simplification tied to the absence of authentication (A-4),
-and it is recorded as a limitation rather than left for a reviewer to discover.
+Question 5 was the sharpest, and it has since been answered. In the original prototype,
+anyone holding a short code could read its full stats — a simplification tied to the absence
+of authentication (A-4), recorded as a limitation rather than left for a reviewer to
+discover. It was then raised as a real requirement and closed: analytics are now readable
+only by a link's owner or an administrator
+([ADR-008](../decisions/ADR-008-authentication-and-ownership.md)).
+
+Worth noting how that went, since it is the point of this exercise. Because the gap had been
+written down with its reasoning attached, implementing the answer was a scoped change rather
+than a rediscovery: `created_by` already existed for exactly this purpose, and the ambiguity
+register recorded which option had been deferred and why. An undocumented shortcut would have
+cost the same work plus the archaeology.

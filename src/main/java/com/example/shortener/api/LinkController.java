@@ -9,10 +9,10 @@ import com.example.shortener.service.RateLimiter;
 import com.example.shortener.service.ShortLinkService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
-import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -33,30 +33,30 @@ public class LinkController {
     private final ShortLinkService service;
     private final ShortenerProperties properties;
     private final RateLimiter rateLimiter;
-    private final ClientKeyResolver clientKeyResolver;
 
     public LinkController(ShortLinkService service,
                           ShortenerProperties properties,
-                          RateLimiter rateLimiter,
-                          ClientKeyResolver clientKeyResolver) {
+                          RateLimiter rateLimiter) {
         this.service = service;
         this.properties = properties;
         this.rateLimiter = rateLimiter;
-        this.clientKeyResolver = clientKeyResolver;
     }
 
     @PostMapping
     @Operation(summary = "Create a short link")
     public ResponseEntity<LinkResponse> create(@Valid @RequestBody CreateLinkRequest request,
-                                               HttpServletRequest httpRequest) {
-        String clientKey = clientKeyResolver.resolve(httpRequest);
-        RateLimiter.Decision decision = rateLimiter.tryAcquire(clientKey);
+                                               Authentication authentication) {
+        // Now keyed by the authenticated principal rather than the client address. This
+        // closes the gap noted in ADR-005: an address-keyed bucket is bypassed with a pool
+        // of IPs and over-restricts everyone behind shared NAT.
+        String owner = authentication.getName();
+        RateLimiter.Decision decision = rateLimiter.tryAcquire(owner);
         if (!decision.allowed()) {
             throw new RateLimitExceededException(decision.retryAfterSeconds());
         }
 
         ShortLink link = service.create(
-                request.url(), request.alias(), request.expiresAt(), clientKey);
+                request.url(), request.alias(), request.expiresAt(), owner);
         LinkResponse body = LinkResponse.from(link, properties.getBaseUrl());
 
         ResponseEntity.BodyBuilder response = ResponseEntity
@@ -69,25 +69,34 @@ public class LinkController {
     }
 
     @GetMapping("/{code}")
-    @Operation(summary = "Fetch a short link's metadata without redirecting")
-    public LinkResponse get(@PathVariable String code) {
-        return LinkResponse.from(service.require(code), properties.getBaseUrl());
+    @Operation(summary = "Fetch a short link's metadata without redirecting. Owner or administrator only.")
+    public LinkResponse get(@PathVariable String code, Authentication authentication) {
+        return LinkResponse.from(service.requireOwned(code, principalOf(authentication)),
+                properties.getBaseUrl());
     }
 
     @GetMapping("/{code}/stats")
-    @Operation(summary = "Aggregated click analytics for a short link")
+    @Operation(summary = "Aggregated click analytics for a short link. Owner or administrator only.")
     public LinkStatsResponse stats(@PathVariable String code,
-                                   @RequestParam(defaultValue = "30") int windowDays) {
+                                   @RequestParam(defaultValue = "30") int windowDays,
+                                   Authentication authentication) {
         if (windowDays < 1 || windowDays > 365) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "windowDays must be between 1 and 365");
         }
-        return LinkStatsResponse.from(service.stats(code, windowDays), properties.getBaseUrl());
+        return LinkStatsResponse.from(
+                service.stats(code, windowDays, principalOf(authentication)), properties.getBaseUrl());
     }
 
     @DeleteMapping("/{code}")
-    @Operation(summary = "Retire a short link. The link stops resolving; analytics are retained.")
-    public ResponseEntity<Void> deactivate(@PathVariable String code) {
-        service.deactivate(code);
+    @Operation(summary = "Retire a short link. Owner or administrator only. Analytics are retained.")
+    public ResponseEntity<Void> deactivate(@PathVariable String code, Authentication authentication) {
+        service.deactivate(code, principalOf(authentication));
         return ResponseEntity.noContent().build();
+    }
+
+    private ShortLinkService.Principal principalOf(Authentication authentication) {
+        boolean admin = authentication.getAuthorities().stream()
+                .anyMatch(authority -> "ROLE_ADMIN".equals(authority.getAuthority()));
+        return new ShortLinkService.Principal(authentication.getName(), admin);
     }
 }

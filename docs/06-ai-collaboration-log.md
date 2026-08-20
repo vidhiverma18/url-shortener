@@ -89,6 +89,28 @@ it looked idiomatic, and the claim in the docs was believed rather than tested. 
 annotation is gone, and `ShortLinkResolutionTest` now asserts its absence with the reason
 attached.*
 
+**9. Securing every route, including the redirect.** The first generated filter chain ended
+with `.anyRequest().authenticated()`. Uniform and defensible-looking, and it would have
+broken the product: every short link already shared with the world would start returning
+401. Rewritten so `GET /{code}` is explicitly public and everything else is default-deny.
+*Same root cause as the general lesson below — the model applied a security default without
+knowing which route is the product.*
+
+**10. Returning 403 to a caller who does not own a link.** The literally correct status, and
+the wrong one here: 403 confirms the code exists, handing an enumeration attacker the one
+bit the Feistel permutation was chosen to withhold. Changed to 404, consistent with the
+expired-link decision in ADR-007.
+
+**11. Seeding demo users from a SQL migration with hardcoded BCrypt hashes.** Convenient,
+and it commits a working credential to git forever, where it will outlive the demo and get
+copied into something real. Replaced with a flag-gated runtime seeder that hashes at
+startup, logs a warning every time, and puts no usable secret in the repository.
+
+**12. Keying the login rate limiter by username.** Reads as more precise than keying by
+address, and inverts the control into a denial-of-service tool: an attacker locks any known
+account out by deliberately failing to log in as them. Kept address-keyed, with the reason
+in a comment.
+
 ## Where AI was most and least useful
 
 **Most:** mechanical breadth. Boilerplate, DTO and mapper code, the Lua token bucket,
@@ -97,9 +119,16 @@ which produced two cases (`instance-data`, `metadata.goog`) that would probably 
 missed by hand.
 
 **Least:** anything where the right answer depends on a priority that is not in the code.
-Every one of the seven rejections above is a case where the generated code was reasonable in
+Every one of the rejections above is a case where the generated code was reasonable in
 isolation and wrong against a stated constraint. AI does not know that the redirect is the
 product. That has to be decided, written down, and enforced.
+
+The security work sharpened this. Spring Security is heavily represented in training data,
+so the generated configuration was fluent and mostly right — and its three mistakes were all
+the same mistake: applying a sound *general* default (secure every route, return the
+technically correct status, seed data in a migration) to a specific system whose constraints
+point the other way. Fluency in the framework is exactly what makes those defaults slip
+through review.
 
 ## Secure usage
 

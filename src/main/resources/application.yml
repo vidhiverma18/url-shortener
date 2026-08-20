@@ -59,6 +59,11 @@ shortener:
   negative-cache-ttl: 30s
   rate-limit-burst: 20
   rate-limit-per-minute: 60
+  security:
+    jwt-secret: ${SHORTENER_JWT_SECRET:local-development-signing-key-change-me-please-32b}
+    token-ttl: 1h
+    login-attempts-per-minute: 10
+    seed-demo-users: ${SHORTENER_SEED_DEMO_USERS:true}
   analytics:
     flush-interval-ms: 1000
 

@@ -43,13 +43,13 @@ assumption, and every assumption is falsifiable by a product owner in one senten
 | A-1 | What does "analytics" mean? | (a) a click counter; (b) per-click detail with dimensions; (c) a real-time dashboard | **(b)** — dimensioned click events with aggregate queries. (a) is too thin to be worth calling analytics; (c) is a product, not a service feature. See [the ambiguous scenario](scenarios/ambiguous.md). | Low. (a) is a subset; (c) reads from the same table. |
 | A-2 | What does "reliability" mean? | (a) uptime SLO; (b) graceful degradation of dependencies; (c) durable analytics | **(b)** for the redirect path, explicitly **not** (c). Analytics are best-effort. | Medium. Durability needs a real queue. |
 | A-3 | Is the same long URL deduplicated to one code? | (a) yes, save space; (b) no, one code per creation | **(b)** — dedup silently merges two campaigns' analytics into one bucket, which is a data-correctness bug wearing a storage-optimisation costume. | Low, additive. |
-| A-4 | Who owns a link? | (a) anonymous; (b) API-key scoped; (c) full user accounts | **(a)** with the owner recorded for future use. Authentication is out of scope for a prototype, and pretending otherwise would produce a fake security story. | Medium. `created_by` is already persisted. |
+| A-4 | Who owns a link? | (a) anonymous; (b) API-key scoped; (c) full user accounts | Originally **(a)**, with the owner recorded for future use. **Revised to (c)** after the reviewer asked for restricted access: JWT bearer tokens with per-user ownership on every management endpoint. The redirect stays public. See [ADR-008](decisions/ADR-008-authentication-and-ownership.md). | Resolved. The `created_by` column anticipated this and now carries the authenticated principal. |
 | A-5 | Do expired links return 404 or 410? | (a) 404; (b) 410 Gone | **(a)** — distinguishing "expired" from "never existed" tells a scanner which codes were once real. | Trivial. |
 | A-6 | 301 or 302? | (a) 301, cacheable, fast; (b) 302, always hits origin | **(b)** — a 301 is cached by browsers indefinitely, which permanently ends both analytics and the ability to retire a link. See [ADR-002](decisions/ADR-002-redirect-status.md). | High if wrong. Already-issued 301s cannot be recalled. |
 
 ## Out of scope, and stated plainly
 
-Authentication and multi-tenancy, custom domains, malware and phishing scanning against a
+Multi-tenancy beyond per-user ownership, custom domains, malware and phishing scanning against a
 live feed, geographic analytics, a web UI, and multi-region replication. Each is a
 defensible product requirement; none can be done credibly in the time available, and a
 shallow version of any of them would be worse than its absence.

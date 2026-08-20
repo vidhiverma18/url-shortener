@@ -70,18 +70,33 @@ public class RateLimiter {
         this.script = new DefaultRedisScript<>(TOKEN_BUCKET_SCRIPT, List.class);
     }
 
+    /** Limits link creation, keyed by the authenticated principal. */
     public Decision tryAcquire(String clientKey) {
+        return tryAcquire("create", clientKey,
+                properties.getRateLimitBurst(),
+                properties.getRateLimitPerMinute() / 60.0);
+    }
+
+    /**
+     * Limits token issuance, keyed by client address. Its own bucket, because a login
+     * attempt is unauthenticated and must not draw down or be shielded by a principal's
+     * creation allowance.
+     */
+    public Decision tryAcquireLogin(String clientAddress) {
+        int perMinute = properties.getSecurity().getLoginAttemptsPerMinute();
+        return tryAcquire("login", clientAddress, perMinute, perMinute / 60.0);
+    }
+
+    private Decision tryAcquire(String bucket, String clientKey, int capacity, double refillPerSec) {
         StringRedisTemplate redis = redisProvider.getIfAvailable();
         if (redis == null) {
             return Decision.allowedWithoutLimiting();
         }
-        int capacity = properties.getRateLimitBurst();
-        double refillPerSec = properties.getRateLimitPerMinute() / 60.0;
         long ttlSeconds = Math.max(60, (long) Math.ceil(capacity / Math.max(refillPerSec, 0.0001)));
         try {
             List<?> result = redis.execute(
                     script,
-                    List.of("ratelimit:create:" + clientKey),
+                    List.of("ratelimit:" + bucket + ":" + clientKey),
                     String.valueOf(capacity),
                     String.valueOf(refillPerSec),
                     String.valueOf(Instant.now().getEpochSecond()),

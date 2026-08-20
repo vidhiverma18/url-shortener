@@ -36,6 +36,72 @@ public class ShortenerProperties {
     @Positive
     private int rateLimitPerMinute = 60;
 
+    private final Security security = new Security();
+
+    public Security getSecurity() {
+        return security;
+    }
+
+    public static class Security {
+
+        /**
+         * HMAC signing key for issued tokens. HS256 requires at least 256 bits, and the
+         * application refuses to start if this is shorter, because a short key silently
+         * weakens every token rather than failing loudly.
+         */
+        @NotBlank
+        private String jwtSecret = "local-development-signing-key-change-me-please-32b";
+
+        /**
+         * Token lifetime. Short because there is no revocation list: a stateless token
+         * cannot be withdrawn before it expires, so the expiry <em>is</em> the revocation
+         * window.
+         */
+        private Duration tokenTtl = Duration.ofHours(1);
+
+        /** Failed and successful token requests allowed per client address, per minute. */
+        @Positive
+        private int loginAttemptsPerMinute = 10;
+
+        /**
+         * Creates the demo accounts described in the README on startup. Convenience for
+         * reviewers; it logs a warning every time and must be off in any real deployment.
+         */
+        private boolean seedDemoUsers = true;
+
+        public String getJwtSecret() {
+            return jwtSecret;
+        }
+
+        public void setJwtSecret(String jwtSecret) {
+            this.jwtSecret = jwtSecret;
+        }
+
+        public Duration getTokenTtl() {
+            return tokenTtl;
+        }
+
+        public void setTokenTtl(Duration tokenTtl) {
+            this.tokenTtl = tokenTtl;
+        }
+
+        public int getLoginAttemptsPerMinute() {
+            return loginAttemptsPerMinute;
+        }
+
+        public void setLoginAttemptsPerMinute(int loginAttemptsPerMinute) {
+            this.loginAttemptsPerMinute = loginAttemptsPerMinute;
+        }
+
+        public boolean isSeedDemoUsers() {
+            return seedDemoUsers;
+        }
+
+        public void setSeedDemoUsers(boolean seedDemoUsers) {
+            this.seedDemoUsers = seedDemoUsers;
+        }
+    }
+
     public String getBaseUrl() {
         return baseUrl;
     }

@@ -40,6 +40,10 @@ services:
       SPRING_DATA_REDIS_HOST: redis
       SPRING_DATA_REDIS_PORT: 6379
       SHORTENER_BASE_URL: ${SHORTENER_BASE_URL:-http://localhost:8080}
+      # Both defaults are development placeholders and must be overridden anywhere real.
+      # The application refuses to start if the signing key is under 32 bytes.
+      SHORTENER_JWT_SECRET: ${SHORTENER_JWT_SECRET:-local-development-signing-key-change-me-please-32b}
+      SHORTENER_SEED_DEMO_USERS: ${SHORTENER_SEED_DEMO_USERS:-true}
     ports:
       - "8080:8080"
     healthcheck:

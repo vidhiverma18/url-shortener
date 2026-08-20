@@ -15,6 +15,9 @@ spring:
 shortener:
   base-url: http://localhost:8080
   code-secret: test-secret
+  security:
+    jwt-secret: test-only-signing-key-at-least-32-bytes-long
+    seed-demo-users: true
   analytics:
     # Effectively disables the scheduled flush so tests drive it explicitly. A timer
     # racing the assertions produced exactly the kind of intermittent failure that

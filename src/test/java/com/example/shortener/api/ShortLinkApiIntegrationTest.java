@@ -9,6 +9,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.ActiveProfiles;
@@ -79,24 +80,28 @@ class ShortLinkApiIntegrationTest {
     @Autowired
     private ClickRecorder clickRecorder;
 
+    private String alice;
+
     /**
      * Each test starts from an empty corpus. Without this the suite passes once and then
      * fails on re-run against a persistent database, which is the worst kind of flake:
      * it only appears after someone trusts the suite.
      */
     @BeforeEach
-    void resetCorpus() {
+    void resetCorpus() throws Exception {
         // Drain first, then truncate. Events left buffered by an earlier test still
         // reference links that truncation is about to remove, and the resulting foreign
         // key violation would abandon the batch that the next test's events land in.
         clickRecorder.flush();
         jdbcTemplate.execute("TRUNCATE click_events, short_links RESTART IDENTITY CASCADE");
+        alice = tokenFor("alice", "alice-password");
     }
 
     @Test
     @DisplayName("creating a link returns 201 with a seven character code and a Location header")
     void createsShortLink() throws Exception {
         MvcResult result = mockMvc.perform(post("/api/v1/links")
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + alice)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"url\":\"https://example.com/a/very/long/path?with=query\"}"))
                 .andExpect(status().isCreated())
@@ -142,12 +147,14 @@ class ShortLinkApiIntegrationTest {
     @Test
     void rejectsUnsafeTargets() throws Exception {
         mockMvc.perform(post("/api/v1/links")
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + alice)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"url\":\"http://169.254.169.254/latest/meta-data/\"}"))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.detail").value(org.hamcrest.Matchers.containsString("not publicly routable")));
 
         mockMvc.perform(post("/api/v1/links")
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + alice)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"url\":\"javascript:alert(1)\"}"))
                 .andExpect(status().isBadRequest());
@@ -156,6 +163,7 @@ class ShortLinkApiIntegrationTest {
     @Test
     void rejectsMissingUrl() throws Exception {
         mockMvc.perform(post("/api/v1/links")
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + alice)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{}"))
                 .andExpect(status().isBadRequest())
@@ -166,6 +174,7 @@ class ShortLinkApiIntegrationTest {
     @DisplayName("custom aliases work once and conflict on reuse")
     void customAliasIsClaimedExactlyOnce() throws Exception {
         mockMvc.perform(post("/api/v1/links")
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + alice)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"url\":\"https://example.com/docs\",\"alias\":\"team-docs\"}"))
                 .andExpect(status().isCreated())
@@ -177,6 +186,7 @@ class ShortLinkApiIntegrationTest {
                 .andExpect(header().string("Location", "https://example.com/docs"));
 
         mockMvc.perform(post("/api/v1/links")
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + alice)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"url\":\"https://example.com/other\",\"alias\":\"team-docs\"}"))
                 .andExpect(status().isConflict());
@@ -186,6 +196,7 @@ class ShortLinkApiIntegrationTest {
     @DisplayName("reserved aliases cannot shadow application routes")
     void reservedAliasesAreRefused() throws Exception {
         mockMvc.perform(post("/api/v1/links")
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + alice)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"url\":\"https://example.com\",\"alias\":\"actuator\"}"))
                 .andExpect(status().isBadRequest())
@@ -197,6 +208,7 @@ class ShortLinkApiIntegrationTest {
     void expiredLinksDoNotResolve() throws Exception {
         String past = Instant.now().minusSeconds(60).toString();
         MvcResult created = mockMvc.perform(post("/api/v1/links")
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + alice)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"url\":\"https://example.com/gone\",\"expiresAt\":\"" + past + "\"}"))
                 .andExpect(status().isCreated())
@@ -212,9 +224,12 @@ class ShortLinkApiIntegrationTest {
         String code = codeOf(create("https://example.com/temporary"));
 
         mockMvc.perform(get("/" + code)).andExpect(status().isFound());
-        mockMvc.perform(delete("/api/v1/links/" + code)).andExpect(status().isNoContent());
+        mockMvc.perform(delete("/api/v1/links/" + code)
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + alice))
+                .andExpect(status().isNoContent());
         mockMvc.perform(get("/" + code)).andExpect(status().isNotFound());
-        mockMvc.perform(get("/api/v1/links/" + code))
+        mockMvc.perform(get("/api/v1/links/" + code)
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + alice))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.active").value(false));
     }
@@ -232,12 +247,14 @@ class ShortLinkApiIntegrationTest {
         // Nothing is durable yet: the redirect returned before the write happened.
         // Asserting this is the point, because it is the contract the redirect path relies on.
         assertThat(clickRecorder.getBufferedEvents()).isEqualTo(3);
-        mockMvc.perform(get("/api/v1/links/" + code + "/stats"))
+        mockMvc.perform(get("/api/v1/links/" + code + "/stats")
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + alice))
                 .andExpect(jsonPath("$.totalClicks").value(0));
 
         clickRecorder.flush();
 
-        mockMvc.perform(get("/api/v1/links/" + code + "/stats"))
+        mockMvc.perform(get("/api/v1/links/" + code + "/stats")
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + alice))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.totalClicks").value(3))
                 .andExpect(jsonPath("$.uniqueVisitors").value(1))
@@ -250,7 +267,8 @@ class ShortLinkApiIntegrationTest {
     @Test
     void statsRejectAnOutOfRangeWindow() throws Exception {
         String code = codeOf(create("https://example.com/window"));
-        mockMvc.perform(get("/api/v1/links/" + code + "/stats?windowDays=0"))
+        mockMvc.perform(get("/api/v1/links/" + code + "/stats?windowDays=0")
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + alice))
                 .andExpect(status().isBadRequest());
     }
 
@@ -264,10 +282,20 @@ class ShortLinkApiIntegrationTest {
 
     private MvcResult create(String url) throws Exception {
         return mockMvc.perform(post("/api/v1/links")
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + alice)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"url\":\"" + url + "\"}"))
                 .andExpect(status().isCreated())
                 .andReturn();
+    }
+
+    private String tokenFor(String username, String password) throws Exception {
+        MvcResult result = mockMvc.perform(post("/api/v1/auth/token")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"username\":\"" + username + "\",\"password\":\"" + password + "\"}"))
+                .andExpect(status().isOk())
+                .andReturn();
+        return objectMapper.readTree(result.getResponse().getContentAsString()).get("accessToken").asText();
     }
 
     private String codeOf(MvcResult result) throws Exception {

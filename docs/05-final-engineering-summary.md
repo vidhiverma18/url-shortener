@@ -78,14 +78,15 @@ out of rotation and convert degradation into outage.
    sentence if click data ever feeds billing.)*
 2. Click data has no billing or regulatory role.
 3. The service runs behind a load balancer that owns `X-Forwarded-For`.
-4. Links are semi-private: unguessable, but not access-controlled.
+4. Redirects are public by design; link *management* and analytics are access-controlled.
 5. Single region, one PostgreSQL, is adequate for the target scale.
 
 ## Limitations
 
-No authentication, so anyone with a code can read its analytics. SSRF protection covers
-literal IPs only. No malware or phishing feed. Rate limiting fails open. No load test behind
-the latency target. `docker compose up --build` could not be run to completion on the
+Issued tokens cannot be revoked before they expire, so the one-hour TTL is the revocation
+window. One shared signing secret. No account self-service. SSRF protection covers literal
+IPs only. No malware or phishing feed. Rate limiting fails open. No load test behind the
+latency target. `docker compose up --build` could not be run to completion on the
 development machine because its `/etc/hosts` blocks Maven Central; the service was verified
 against the Compose PostgreSQL and Redis directly instead.
 
@@ -96,8 +97,9 @@ Full detail, including what is *not* tested, is in
 
 1. **Load test the redirect path** and either meet the p99 target or amend it. It is
    currently an intention with nothing behind it.
-2. **Authentication and link ownership**, which unlocks meaningful rate limiting and closes
-   the analytics-privacy gap.
+2. **Token revocation**, via a denylist of token identifiers in Redis. Authentication and
+   ownership now exist ([ADR-008](decisions/ADR-008-authentication-and-ownership.md)), but
+   disabling a user does not stop a token already in flight.
 3. **Move analytics to a durable log**, if and only if the answer to "does this feed
    billing" is yes.
 4. **Egress network controls**, which is where SSRF is actually stopped.

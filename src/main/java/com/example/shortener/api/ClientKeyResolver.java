@@ -4,27 +4,19 @@ import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.stereotype.Component;
 
 /**
- * Identifies the caller for rate limiting and link ownership.
+ * Determines the caller's network address, for visitor hashing and for throttling requests
+ * that have no principal yet.
  *
- * <p>Prefers an API key, falling back to the client address. The forwarded header is
- * only consulted for its <em>first</em> entry and only because this service is
- * expected to sit behind a load balancer that overwrites it; a client-supplied
- * {@code X-Forwarded-For} is trivially spoofed, so this is a convenience for correct
- * deployments rather than a security control.
+ * <p>The forwarded header is consulted only for its <em>first</em> entry, and only because
+ * this service is expected to sit behind a load balancer that overwrites it. A
+ * client-supplied {@code X-Forwarded-For} is trivially spoofed, so this is a convenience for
+ * correct deployments rather than a security control — which is why it is no longer used to
+ * identify who owns a link. That is now the authenticated principal (ADR-008).
  */
 @Component
 public class ClientKeyResolver {
 
-    private static final String API_KEY_HEADER = "X-API-Key";
     private static final String FORWARDED_FOR = "X-Forwarded-For";
-
-    public String resolve(HttpServletRequest request) {
-        String apiKey = request.getHeader(API_KEY_HEADER);
-        if (apiKey != null && !apiKey.isBlank()) {
-            return "key:" + apiKey.trim();
-        }
-        return "ip:" + clientAddress(request);
-    }
 
     public String clientAddress(HttpServletRequest request) {
         String forwarded = request.getHeader(FORWARDED_FOR);
