@@ -1,6 +1,11 @@
 target/
 .env
 
+# Local agent/tooling state, not part of the project.
+.isaac/
+.cursor/
+__pycache__/
+
 # The assignment brief is classified material and must not be redistributed with
 # the submission.
 *.pdf

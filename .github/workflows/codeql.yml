@@ -1,0 +1,44 @@
+name: CodeQL
+
+# Static analysis for the classes of bug this project cares most about: injection, path
+# traversal, and unsafe request handling on a service whose entire input surface is
+# attacker-supplied URLs.
+#
+# Runs free on public repositories. On a private one it requires GitHub Advanced Security and
+# will fail at the upload step with an "Advanced Security must be enabled" error — if that
+# happens, delete this file rather than leaving a permanently red check.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    # Weekly, because a dependency can become vulnerable without this repository changing.
+    - cron: '0 6 * * 1'
+
+jobs:
+  analyze:
+    name: Analyze Java
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+      actions: read
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+
+      - uses: github/codeql-action/init@v3
+        with:
+          languages: java-kotlin
+          queries: security-and-quality
+
+      - name: Build
+        run: mvn -B -DskipTests package
+
+      - uses: github/codeql-action/analyze@v3

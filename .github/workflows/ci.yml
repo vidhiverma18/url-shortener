@@ -1,0 +1,62 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# A second push to the same branch cancels the first; there is no value in finishing a run
+# for a commit that has already been replaced.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Build and test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Pinned to 21 deliberately. The project targets 21, and on newer JDKs Mockito's
+      # bytecode backend cannot create mocks, which fails the unit tests for reasons that have
+      # nothing to do with the code under test.
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+
+      # Integration tests start a real PostgreSQL through Testcontainers and run the
+      # production Flyway migrations against it. Docker is present on GitHub-hosted runners,
+      # so no service container is needed here.
+      - name: Build and test
+        run: mvn -B verify
+
+      - name: Upload test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-reports
+          path: target/surefire-reports/
+          retention-days: 7
+
+  image:
+    name: Container image and vulnerability scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build image
+        run: docker build -t url-shortener:${{ github.sha }} .
+
+      - name: Scan image
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: url-shortener:${{ github.sha }}
+          severity: HIGH,CRITICAL
+          # Unfixed vulnerabilities in a base image cannot be actioned by this repository, and
+          # a gate that fails on work nobody can do gets switched off within a week.
+          ignore-unfixed: true
+          exit-code: '1'
