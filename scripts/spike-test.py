@@ -8,8 +8,14 @@ status distribution and the latency tail, because a spike that returns errors
 quickly and a spike that hangs are very different failures.
 
 Usage: python3 scripts/spike-test.py
+
+Environment:
+  SHORTENER_BASE_URL  service under test (default http://localhost:8080)
+  SPIKE_USERNAME      account to authenticate as (default alice)
+  SPIKE_PASSWORD      its password (default alice-password)
 """
 import json
+import os
 import statistics
 import subprocess
 import sys
@@ -17,8 +23,15 @@ import time
 import urllib.error
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 
-BASE = "http://localhost:8080"
+BASE = os.environ.get("SHORTENER_BASE_URL", "http://localhost:8080").rstrip("/")
+USERNAME = os.environ.get("SPIKE_USERNAME", "alice")
+PASSWORD = os.environ.get("SPIKE_PASSWORD", "alice-password")
+
+# Resolved from this file rather than the working directory, so the drill can be started from
+# anywhere and still find the Compose project it needs to stop Redis in.
+REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
 def request(method, path, body=None, token=None, timeout=15):
@@ -76,14 +89,14 @@ def spike(fn, args, concurrency):
 
 
 def redis(action):
-    subprocess.run(["docker", "compose", action, "redis"], cwd="..", capture_output=True)
+    subprocess.run(["docker", "compose", action, "redis"], cwd=REPO_ROOT, capture_output=True)
 
 
 def main():
     status, _, body = request("POST", "/api/v1/auth/token",
-                              {"username": "alice", "password": "alice-password"})
+                              {"username": USERNAME, "password": PASSWORD})
     if status != 200:
-        print(f"Could not authenticate ({status}). Is the service running?")
+        print(f"Could not authenticate as {USERNAME} ({status}). Is {BASE} running?")
         sys.exit(1)
     token = json.loads(body)["accessToken"]
 
@@ -96,8 +109,7 @@ def main():
 
     print("\nPHASE 2  redirect spike, Redis stopped (2000 requests, 200 concurrent)")
     print("         every request now misses cache and hits PostgreSQL through a 20-connection pool")
-    subprocess.run(["docker", "compose", "stop", "redis"],
-                   cwd="/path/to/url_shortner", capture_output=True)
+    redis("stop")
     time.sleep(3)
     statuses = report("cache miss storm", spike(redirect, [code] * 2000, 200))
 
@@ -108,8 +120,7 @@ def main():
                     range(300), 100)
     report("writes, limiter unavailable", created)
 
-    subprocess.run(["docker", "compose", "start", "redis"],
-                   cwd="/path/to/url_shortner", capture_output=True)
+    redis("start")
     time.sleep(6)
 
     print("\nPHASE 4  create spike, Redis healthy (300 requests, 100 concurrent)")

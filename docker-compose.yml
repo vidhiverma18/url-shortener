@@ -6,7 +6,9 @@ services:
       POSTGRES_USER: shortener
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-shortener_local_dev}
     ports:
-      - "5432:5432"
+      # Only the host side is configurable. A developer who already runs PostgreSQL on 5432 —
+      # which is most of them — otherwise cannot start this at all.
+      - "${POSTGRES_PORT:-5432}:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -19,7 +21,7 @@ services:
     image: redis:7-alpine
     command: ["redis-server", "--save", "", "--appendonly", "no"]
     ports:
-      - "6379:6379"
+      - "${REDIS_PORT:-6379}:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -39,13 +41,27 @@ services:
       SPRING_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD:-shortener_local_dev}
       SPRING_DATA_REDIS_HOST: redis
       SPRING_DATA_REDIS_PORT: 6379
-      SHORTENER_BASE_URL: ${SHORTENER_BASE_URL:-http://localhost:8080}
-      # Both defaults are development placeholders and must be overridden anywhere real.
-      # The application refuses to start if the signing key is under 32 bytes.
-      SHORTENER_JWT_SECRET: ${SHORTENER_JWT_SECRET:-local-development-signing-key-change-me-please-32b}
+      SHORTENER_BASE_URL: ${SHORTENER_BASE_URL:-http://localhost:${APP_PORT:-8080}}
+      # Keys the code permutation and the visitor hash. Carries the same development
+      # placeholder as application.yml rather than an empty value, because nothing validates
+      # this and an empty key would be accepted in silence. Change it anywhere real, then keep
+      # it stable: changing it later changes the codes minted from that point on.
+      SHORTENER_CODE_SECRET: ${SHORTENER_CODE_SECRET:-local-development-only-change-me}
+      # Left empty on purpose. With no key configured the application generates a random one
+      # per process and warns; that breaks tokens across a restart, which is visible and
+      # harmless, whereas a shipped default is a private key published in the repository.
+      # Anywhere real, prefer SHORTENER_JWT_SECRET_FILE pointing at a mounted secret over an
+      # environment variable, which is readable through /proc and container inspection.
+      SHORTENER_JWT_SECRET: ${SHORTENER_JWT_SECRET:-}
+      SHORTENER_JWT_SECRET_FILE: ${SHORTENER_JWT_SECRET_FILE:-}
       SHORTENER_SEED_DEMO_USERS: ${SHORTENER_SEED_DEMO_USERS:-true}
+      # Destination screening runs on the local blocklist alone until a key is supplied, so
+      # there is no hard third-party dependency out of the box.
+      SHORTENER_SCREENING_ENABLED: ${SHORTENER_SCREENING_ENABLED:-true}
+      SHORTENER_SAFE_BROWSING_KEY: ${SHORTENER_SAFE_BROWSING_KEY:-}
+      SHORTENER_REVOCATION_FAIL_CLOSED: ${SHORTENER_REVOCATION_FAIL_CLOSED:-false}
     ports:
-      - "8080:8080"
+      - "${APP_PORT:-8080}:8080"
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:8080/actuator/health"]
       interval: 10s
