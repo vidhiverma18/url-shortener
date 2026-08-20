@@ -1,0 +1,67 @@
+spring:
+  application:
+    name: url-shortener
+  datasource:
+    url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:5432/shortener}
+    username: ${SPRING_DATASOURCE_USERNAME:shortener}
+    password: ${SPRING_DATASOURCE_PASSWORD:shortener_local_dev}
+    hikari:
+      maximum-pool-size: 20
+      connection-timeout: 3000
+  jpa:
+    hibernate:
+      # Flyway owns the schema. Hibernate is only allowed to check that the mapping
+      # still matches it, so a drifted entity fails at startup instead of at 3am.
+      ddl-auto: validate
+    open-in-view: false
+    properties:
+      hibernate:
+        jdbc:
+          batch_size: 100
+        order_inserts: true
+  flyway:
+    enabled: true
+    baseline-on-migrate: true
+  data:
+    redis:
+      host: ${SPRING_DATA_REDIS_HOST:localhost}
+      port: ${SPRING_DATA_REDIS_PORT:6379}
+      # Aggressively short: the cache is an optimisation, and waiting on an unhealthy
+      # Redis would make the redirect path slower than skipping the cache entirely.
+      timeout: 200ms
+      connect-timeout: 200ms
+
+server:
+  error:
+    include-stacktrace: never
+  shutdown: graceful
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus
+  endpoint:
+    health:
+      show-details: when-authorized
+      probes:
+        enabled: true
+  health:
+    # Redis is a soft dependency: the service degrades but keeps serving without it,
+    # so its state must not flip the pod's readiness probe.
+    redis:
+      enabled: false
+
+shortener:
+  base-url: ${SHORTENER_BASE_URL:http://localhost:8080}
+  code-secret: ${SHORTENER_CODE_SECRET:local-development-only-change-me}
+  cache-ttl: 10m
+  negative-cache-ttl: 30s
+  rate-limit-burst: 20
+  rate-limit-per-minute: 60
+  analytics:
+    flush-interval-ms: 1000
+
+logging:
+  level:
+    com.example.shortener: INFO

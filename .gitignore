@@ -1,0 +1,11 @@
+target/
+.env
+
+# The assignment brief is classified material and must not be redistributed with
+# the submission.
+*.pdf
+*.log
+.DS_Store
+.idea/
+*.iml
+.vscode/
