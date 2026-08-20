@@ -17,7 +17,7 @@ jobs:
     name: Build and test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # Pinned to 21 deliberately. The project targets 21, and on newer JDKs Mockito's
       # bytecode backend cannot create mocks, which fails the unit tests for reasons that have
@@ -46,7 +46,7 @@ jobs:
     name: Container image and vulnerability scan
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Build image
         run: docker build -t url-shortener:${{ github.sha }} .
