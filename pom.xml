@@ -86,7 +86,7 @@
               The only dependency not managed by the parent, so it has to track the Boot
               version by hand: the 2.x line follows Spring Boot 3.x, and 3.x follows Boot 4.
             -->
-            <version>2.9.0</version>
+            <version>3.1.0</version>
         </dependency>
 
         <dependency>
