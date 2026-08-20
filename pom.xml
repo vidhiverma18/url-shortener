@@ -19,6 +19,13 @@
 
     <properties>
         <java.version>21</java.version>
+        <!--
+          Both arrive transitively and both are a single patch release behind what the
+          vulnerability scan requires, so they are pulled forward here rather than waiting for
+          the next Spring Boot release to manage them. Remove these once the parent catches up.
+        -->
+        <netty.version>4.1.136.Final</netty.version>
+        <postgresql.version>42.7.12</postgresql.version>
     </properties>
 
     <dependencies>
