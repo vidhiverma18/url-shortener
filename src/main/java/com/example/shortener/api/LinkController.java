@@ -43,7 +43,9 @@ public class LinkController {
     }
 
     @PostMapping
-    @Operation(summary = "Create a short link")
+    @Operation(summary = "Create a short link, or return this owner's existing one for the same URL",
+            description = "201 when a link was created, 200 when an existing one was returned. "
+                    + "Send forceNew to always mint a new code.")
     public ResponseEntity<LinkResponse> create(@Valid @RequestBody CreateLinkRequest request,
                                                Authentication authentication) {
         // Now keyed by the authenticated principal rather than the client address. This
@@ -55,12 +57,16 @@ public class LinkController {
             throw new RateLimitExceededException(decision.retryAfterSeconds());
         }
 
-        ShortLink link = service.create(
-                request.url(), request.alias(), request.expiresAt(), owner);
-        LinkResponse body = LinkResponse.from(link, properties.getBaseUrl());
+        ShortLinkService.Creation creation = service.create(
+                request.url(), request.alias(), request.expiresAt(), owner, request.forceNew());
+        LinkResponse body = LinkResponse.from(creation.link(), properties.getBaseUrl());
 
-        ResponseEntity.BodyBuilder response = ResponseEntity
-                .created(URI.create(body.shortUrl()));
+        // 200 when an existing link came back, 201 only when something was actually created.
+        // A client that retried after a timeout can tell from the status whether its first
+        // attempt had already succeeded, which is the whole point of making this idempotent.
+        ResponseEntity.BodyBuilder response = creation.reused()
+                ? ResponseEntity.ok().location(URI.create(body.shortUrl()))
+                : ResponseEntity.created(URI.create(body.shortUrl()));
         if (decision.remainingTokens() >= 0) {
             response.header("X-RateLimit-Limit", String.valueOf(decision.capacity()));
             response.header("X-RateLimit-Remaining", String.valueOf(decision.remainingTokens()));

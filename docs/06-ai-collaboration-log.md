@@ -141,6 +141,25 @@ been discovered: not by a test, not at deploy, but by whoever went looking for m
 an incident. Configuration is a claim about the system, and this one was checked only by
 reading it.*
 
+**15. Deduplicating URLs globally, and normalising them aggressively.** The obvious
+implementation: hash the URL, look it up across the whole table, and tidy the URL first by
+lowercasing it, stripping the trailing slash and sorting query parameters. Wrong twice.
+Global scope would have returned another user's link, disclosing that they had shortened the
+URL, merging two users' analytics and handing back a code the caller cannot manage. And the
+tidying is unsound — `/a` and `/a/` are different resources on plenty of servers, and query
+order is load-bearing in signed URLs, so it would have redirected people somewhere they never
+asked to go. Scoped to the owner, and normalisation cut back to what RFC 3986 actually
+defines as equivalent. *The asymmetry is the thing worth naming: under-normalising costs one
+extra row, over-normalising costs a wrong redirect, so the two errors are nowhere near equally
+bad and the safe direction is obvious once stated.*
+
+**16. Catching the unique-constraint violation and re-reading inside the same transaction.**
+Reads correctly and cannot work: a failed insert marks the transaction rollback-only, so the
+recovery query fails too. The method is now untransactional, letting each repository call
+carry its own boundary — the same class of mistake as the `@Transactional` defects in entries
+4 and 8, which is three separate bugs in this project caused by assuming a Spring annotation
+does what it looks like it does.
+
 ## Where AI was most and least useful
 
 **Most:** mechanical breadth. Boilerplate, DTO and mapper code, the Lua token bucket,

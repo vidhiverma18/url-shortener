@@ -44,13 +44,21 @@ curl -s -H "Authorization: Bearer $TOKEN" http://localhost:8080/api/v1/links/<co
 | --- | --- | --- | --- |
 | `POST` | `/api/v1/auth/token` | Public | Exchange credentials for a bearer token. |
 | `GET` | `/{code}` | **Public** | Resolve and redirect. Returns `302`. |
-| `POST` | `/api/v1/links` | Authenticated | Create a short link. Optional `alias` and `expiresAt`. |
+| `POST` | `/api/v1/links` | Authenticated | Create a short link, or return your existing one for the same URL. Optional `alias`, `expiresAt`, `forceNew`. |
 | `GET` | `/api/v1/links/{code}` | Owner or admin | Link metadata, without redirecting. |
 | `GET` | `/api/v1/links/{code}/stats` | Owner or admin | Click totals, unique visitors, daily series, top referrers. |
 | `DELETE` | `/api/v1/links/{code}` | Owner or admin | Retire a link. It stops resolving; its analytics are kept. |
 
 The redirect is deliberately public: authenticating it would break every link already
 shared with the world. Everything else is default-deny.
+
+Submitting a URL you have already shortened returns the existing link with **200** rather
+than creating a second one with **201**, so a client retrying after a timeout can tell from
+the status whether its first attempt landed. Reuse is scoped to your own links and applies
+only to plain requests — a custom alias, an explicit expiry, or `"forceNew": true` always
+mints a new code. Matching ignores only what RFC 3986 calls equivalent (scheme and host case,
+a default port, an empty path); a trailing slash is significant. See
+[ADR-010](docs/decisions/ADR-010-url-deduplication.md).
 
 A caller who is not the owner receives `404`, not `403`. A `403` would confirm that the
 code exists, which is the one thing an enumeration attacker cannot otherwise learn. See

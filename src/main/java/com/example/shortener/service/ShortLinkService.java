@@ -29,6 +29,7 @@ public class ShortLinkService {
     private final UrlValidator urlValidator;
     private final LinkCache cache;
     private final ClickRecorder clickRecorder;
+    private final UrlFingerprint fingerprint;
 
     public ShortLinkService(ShortLinkRepository links,
                             ClickEventRepository clicks,
@@ -36,7 +37,8 @@ public class ShortLinkService {
                             ShortCodeFactory codeFactory,
                             UrlValidator urlValidator,
                             LinkCache cache,
-                            ClickRecorder clickRecorder) {
+                            ClickRecorder clickRecorder,
+                            UrlFingerprint fingerprint) {
         this.links = links;
         this.clicks = clicks;
         this.idAllocator = idAllocator;
@@ -44,15 +46,46 @@ public class ShortLinkService {
         this.urlValidator = urlValidator;
         this.cache = cache;
         this.clickRecorder = clickRecorder;
+        this.fingerprint = fingerprint;
     }
 
-    @Transactional
-    public ShortLink create(String rawUrl, String requestedAlias, Instant expiresAt, String createdBy) {
+    /**
+     * Creates a short link, or returns the one this owner already has for the same URL.
+     *
+     * <p>Reuse applies only to the plain case: no custom alias, no explicit expiry, and no
+     * {@code forceNew}. Each of those exclusions is a request for something specific that a
+     * pre-existing link cannot satisfy — an alias names a particular code, an expiry sets a
+     * lifetime the existing link does not have, and {@code forceNew} exists precisely to opt
+     * out. Handing back an old link in those cases would answer a different question from
+     * the one asked.
+     *
+     * <p>Reuse is scoped to the owner. Returning another user's link would leak that they
+     * had shortened the URL, mix two users' traffic into one analytics series, and hand back
+     * a code the caller cannot read stats for or retire — every one of which contradicts the
+     * ownership model in ADR-008.
+     *
+     * <p>Deliberately <b>not</b> {@code @Transactional}. A failed insert marks the
+     * surrounding transaction rollback-only, so the lost-race path below could not re-read
+     * the winner's row inside one. Each repository call carries its own transaction, and
+     * nothing here spans two writes that must succeed together.
+     */
+    public Creation create(String rawUrl, String requestedAlias, Instant expiresAt,
+                           String createdBy, boolean forceNew) {
         // Validation first: an invalid request must not burn a sequence value, or the
         // id space becomes a record of how often people typo a URL.
         String url = urlValidator.validateAndNormalize(rawUrl);
 
         boolean custom = requestedAlias != null && !requestedAlias.isBlank();
+        boolean reusable = !custom && expiresAt == null && !forceNew && createdBy != null;
+        String urlHash = reusable ? fingerprint.of(url) : null;
+
+        if (reusable) {
+            Optional<ShortLink> existing = findReusable(createdBy, urlHash);
+            if (existing.isPresent()) {
+                return new Creation(existing.get(), true);
+            }
+        }
+
         long id = idAllocator.nextId();
         String code = custom ? codeFactory.validateAlias(requestedAlias.trim()) : codeFactory.fromId(id);
 
@@ -60,15 +93,30 @@ public class ShortLinkService {
             throw new AliasAlreadyTakenException(code);
         }
 
-        ShortLink link = new ShortLink(id, code, url, custom, createdBy, expiresAt);
+        ShortLink link = new ShortLink(id, code, url, custom, createdBy, expiresAt, urlHash);
         try {
-            return links.saveAndFlush(link);
+            return new Creation(links.saveAndFlush(link), false);
         } catch (DataIntegrityViolationException e) {
-            // Two concurrent requests for the same alias both pass existsByCode; the
-            // unique index is the actual arbiter and this converts its verdict into a
-            // 409 instead of a 500.
-            throw new AliasAlreadyTakenException(code);
+            if (custom) {
+                // Two concurrent requests for the same alias both pass existsByCode; the
+                // unique index is the actual arbiter and this converts its verdict into a
+                // 409 instead of a 500.
+                throw new AliasAlreadyTakenException(code);
+            }
+            // Lost the race on the deduplication index: an identical request committed
+            // microseconds ago. Returning the winner's link is exactly what reuse promises,
+            // so the race resolves into the intended answer rather than an error.
+            return findReusable(createdBy, urlHash)
+                    .map(winner -> new Creation(winner, true))
+                    .orElseThrow(() -> e);
         }
+    }
+
+    private Optional<ShortLink> findReusable(String createdBy, String urlHash) {
+        if (urlHash == null) {
+            return Optional.empty();
+        }
+        return links.findFirstByCreatedByAndUrlHashAndActiveTrueOrderByIdAsc(createdBy, urlHash);
     }
 
     /**
@@ -155,6 +203,13 @@ public class ShortLinkService {
     }
 
     public record Resolution(long linkId, String url, boolean fromCache) {
+    }
+
+    /**
+     * @param reused true when an existing link was returned rather than a new one created,
+     *               which the API surfaces as 200 rather than 201
+     */
+    public record Creation(ShortLink link, boolean reused) {
     }
 
     /** The authenticated caller, reduced to what authorization actually needs. */

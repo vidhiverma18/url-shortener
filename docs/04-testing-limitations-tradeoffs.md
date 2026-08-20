@@ -2,7 +2,7 @@
 
 ## Testing approach
 
-82 tests, in two tiers, plus a repeatable load and failure drill in `scripts/spike-test.py`.
+93 tests, in two tiers, plus a repeatable load and failure drill in `scripts/spike-test.py`.
 
 **Unit tests (42)** run with no infrastructure and target the components where a bug is
 silent rather than loud.
@@ -109,7 +109,8 @@ read-modify-write would have let more than 20 through.
 | Limitation | Consequence | Why it is acceptable here |
 | --- | --- | --- |
 | No CI pipeline, dependency scanning, or coverage gate | Every quality gate was run by hand; a known CVE in a transitive dependency would go unnoticed | The single largest gap. Honest, but not repeatable by anyone else |
-| Creates are not idempotent | A client retrying after a timeout silently creates a duplicate link | Measured, not assumed: an identical body returns two different codes. Needs an `Idempotency-Key` header backed by a short-lived Redis reservation |
+| Deduplication is by URL, not by request | Two genuinely distinct requests sharing a URL look identical to a retry | Closed the retry-duplicate case ([ADR-010](decisions/ADR-010-url-deduplication.md)); `forceNew` is the escape hatch. An `Idempotency-Key` header remains the more general answer |
+| Matching is conservative | A trailing slash or reordered query parameters produce a second link | Deliberate asymmetry: a duplicate row is cheap, a wrong redirect is not |
 | No rollback path, and migrations are forward-only | Rolling back past a migration is not currently safe | Worth stating regardless of whether a pipeline exists |
 | Logs are plain text, and there is no tracing | Correlating a slow redirect across instances is manual | Metrics are exported; structured JSON logs and tracing are the next observability step |
 | Circuit breaker counts consecutive failures, not a sliding window | A dependency failing intermittently at 40% will not trip it | The mode it defends against — a hung server — fails every call, not some ([ADR-009](decisions/ADR-009-circuit-breaking.md)) |
