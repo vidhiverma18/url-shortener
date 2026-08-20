@@ -35,7 +35,9 @@ class ShortLinkResolutionTest {
 
     private final ShortLinkService service = new ShortLinkService(
             links, clicks, mock(IdAllocator.class), mock(ShortCodeFactory.class),
-            mock(UrlValidator.class), cache, mock(ClickRecorder.class), new UrlFingerprint());
+            mock(UrlValidator.class), cache, mock(ClickRecorder.class), new UrlFingerprint(),
+            mock(com.example.shortener.service.screening.UrlScreeningService.class),
+            mock(AbuseMonitor.class), mock(com.example.shortener.security.audit.AuditLog.class));
 
     @Test
     @DisplayName("a cache hit resolves without touching the repository at all")

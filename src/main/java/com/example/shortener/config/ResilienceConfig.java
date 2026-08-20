@@ -21,4 +21,19 @@ public class ResilienceConfig {
                 properties.getCacheCircuitFailureThreshold(),
                 properties.getCacheCircuitCooldown());
     }
+
+    /**
+     * A separate breaker for the reputation provider.
+     *
+     * <p>Not shared with Redis for the same reason the Redis one is shared between cache and
+     * limiter: a breaker is evidence about one dependency. A third party being slow says
+     * nothing about Redis, and pooling them would let an outage at Google disable the local
+     * cache, converting someone else's incident into ours.
+     */
+    @Bean
+    public CircuitBreaker screeningCircuitBreaker(ShortenerProperties properties) {
+        return new CircuitBreaker("url-reputation",
+                properties.getCacheCircuitFailureThreshold(),
+                properties.getCacheCircuitCooldown());
+    }
 }

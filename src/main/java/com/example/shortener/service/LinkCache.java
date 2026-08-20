@@ -36,6 +36,13 @@ public class LinkCache {
     private static final String KEY_PREFIX = "link:";
     /** Sentinel for a code known not to exist. Not a valid encoded entry, so it cannot collide. */
     private static final String MISS_SENTINEL = "\u0000miss";
+    /**
+     * Sentinel for a code disabled by screening. Cached separately from a miss so a
+     * quarantined link keeps answering 410 from cache. Collapsing it into the miss sentinel
+     * would make the response depend on whether the entry happened to be cached — 410 on a
+     * database read, 404 on a cache hit — for the links most likely to be under heavy traffic.
+     */
+    private static final String GONE_SENTINEL = "\u0000gone";
     private static final char SEPARATOR = '|';
 
     private final ObjectProvider<StringRedisTemplate> redisProvider;
@@ -74,6 +81,9 @@ public class LinkCache {
         if (MISS_SENTINEL.equals(value)) {
             return Optional.of(CacheEntry.miss());
         }
+        if (GONE_SENTINEL.equals(value)) {
+            return Optional.of(CacheEntry.quarantined());
+        }
         int separator = value.indexOf(SEPARATOR);
         if (separator <= 0) {
             return Optional.empty();
@@ -103,6 +113,16 @@ public class LinkCache {
 
     public void putMiss(String code) {
         write(code, MISS_SENTINEL, properties.getNegativeCacheTtl());
+    }
+
+    /**
+     * Caches a quarantine verdict at the full entry TTL rather than the short negative one.
+     * The short TTL exists to limit how long a transient "not found" can persist; a
+     * quarantine is a deliberate decision that is not about to reverse itself, and these are
+     * exactly the links whose traffic should not be reaching the database.
+     */
+    public void putQuarantined(String code) {
+        write(code, GONE_SENTINEL, properties.getCacheTtl());
     }
 
     /**
@@ -138,13 +158,30 @@ public class LinkCache {
         }
     }
 
-    public record CacheEntry(Long linkId, String url, boolean knownMiss) {
+    public record CacheEntry(Long linkId, String url, Outcome outcome) {
+
+        public enum Outcome {
+            HIT, MISS, QUARANTINED
+        }
+
         public static CacheEntry hit(long linkId, String url) {
-            return new CacheEntry(linkId, url, false);
+            return new CacheEntry(linkId, url, Outcome.HIT);
         }
 
         public static CacheEntry miss() {
-            return new CacheEntry(null, null, true);
+            return new CacheEntry(null, null, Outcome.MISS);
+        }
+
+        public static CacheEntry quarantined() {
+            return new CacheEntry(null, null, Outcome.QUARANTINED);
+        }
+
+        public boolean knownMiss() {
+            return outcome == Outcome.MISS;
+        }
+
+        public boolean isQuarantined() {
+            return outcome == Outcome.QUARANTINED;
         }
     }
 }

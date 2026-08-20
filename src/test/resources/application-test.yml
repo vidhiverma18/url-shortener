@@ -1,4 +1,11 @@
 spring:
+  datasource:
+    hikari:
+      # Each integration test class declares its own datasource properties, so each gets its
+      # own application context and its own pool. At the production size of 20 that multiplied
+      # into "FATAL: sorry, too many clients already" as soon as another test class was added.
+      # Tests are single-threaded per context and need a fraction of that.
+      maximum-pool-size: 5
   jpa:
     hibernate:
       ddl-auto: validate
@@ -18,6 +25,14 @@ shortener:
   security:
     jwt-secret: test-only-signing-key-at-least-32-bytes-long
     seed-demo-users: true
+  screening:
+    enabled: true
+    blocked-domains:
+      - malware-test.example
+      - phishing-test.example
+    # Long intervals so the sweeps never race the assertions; tests invoke them directly.
+    rescan-interval: PT1H
+    blocklist-refresh-ms: 3600000
   analytics:
     # Effectively disables the scheduled flush so tests drive it explicitly. A timer
     # racing the assertions produced exactly the kind of intermittent failure that

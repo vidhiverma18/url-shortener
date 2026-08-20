@@ -160,6 +160,82 @@ carry its own boundary — the same class of mistake as the `@Transactional` def
 4 and 8, which is three separate bugs in this project caused by assuming a Spring annotation
 does what it looks like it does.
 
+**17. Putting `@Transactional(REQUIRES_NEW)` on the audit-write method and calling it from a
+convenience method on the same class.** The fourth instance of the Spring-proxy trap in this
+project, and the most expensive, because the failure surfaced nowhere near the cause: the
+self-invocation meant the new transaction never started, the insert joined the caller's
+read-only transaction, and an administrator reading someone else's link got a `500` at flush
+time. Split into a separate `AuditWriter` bean so the proxy is actually crossed. *Four
+occurrences of one root cause is no longer a series of mistakes, it is evidence that
+"annotation on a method I also call internally" needs to be a checklist item.*
+
+**18. Failing closed when the revocation store is unreachable.** Defensible in the abstract and
+wrong here: it converts a Redis outage — which the entire rest of the design treats as a
+degradation — into a total authentication outage. Kept fail-open as the default, made it
+configurable, and wrote down that the short token TTL is what carries the guarantee instead.
+*The generated version was "more secure" in isolation and would have made the service less
+available in exactly the failure the rest of the architecture was built to survive.*
+
+**19. Auto-quarantining links on high click velocity.** Symmetrical with auto-suspending
+accounts on repeated blocked creations, and the symmetry is the error. Refused creations have
+no innocent explanation; a traffic spike has an obvious one, and it is the one you most want to
+keep working. Velocity now only writes an audit record. *Two signals that look alike
+structurally can warrant opposite responses, and the deciding factor is the cost of being wrong
+in each direction, which is not visible in the code.*
+
+**20. Reusing the shared Redis circuit breaker for the Safe Browsing client.** Would have let a
+third-party outage open the breaker that guards our own cache, converting someone else's
+incident into ours. A breaker is evidence about one dependency; this needed its own.
+
+**21. A no-op JWT tamper in an existing test — found, not written, by this work.** The test
+forged a token by flipping the last base64url character of the signature. An HS256 signature is
+32 bytes in 43 characters, or 258 bits, so the final character's low 2 bits are padding: for
+many tokens the "tampered" signature decoded byte-identically and verified correctly. It had
+been passing by luck and started failing once tokens gained a `kid` and `jti` and the signature
+changed. *The test asserted the right thing and demonstrated nothing — the failure mode worth
+remembering is a security test that is green because its negative case was never actually
+negative.*
+
+**22. A React and Vite front end, rejected on the CSP.** The default suggestion for "build a
+front end" was a bundled SPA on its own dev server. Both halves conflict with this system: a
+separate origin needs CORS the service does not have, and a bundler's inline bootstrap and any
+CDN import need `script-src` relaxed beyond `'self'`. *Written as plain assets served by the
+application instead, and not one CSP directive changed. The generated approach was the
+industry default and would have quietly traded a real security property for a build step — the
+policy should constrain the front end, not the other way round.*
+
+**23. A seeded blocklist entry that was invisible for the first minute.** Seeding a demo
+blocked domain in the `ApplicationRunner` looked correct and the screening demo still returned
+`201`. The blocklist checker loads its snapshot on a fixed delay starting at zero, which races
+the runner, so the row existed and the in-memory snapshot did not. Caught by running the demo
+against a real instance rather than by a test. *The seeder now refreshes the snapshot after
+writing, as the admin endpoint already did. Any cached projection of a table has a window
+where a write is invisible, and startup is where that window is easiest to fall into.*
+
+**24. A front end that would have hidden the thing worth showing.** The first console draft
+was a conventional link manager: paste a URL, get a short link. It rendered identically for a
+`201` and a `200`, for a `404` and a `410` — every distinction the system was built around
+collapsed into the same green box. *Rebuilt around a request inspector, with the controls
+attached to it rather than the other way round. Worth recording because nothing was wrong with
+the generated UI; it was a good answer to "show the feature" when the requirement was "show
+the engineering".*
+
+**25. A demo that disabled its own administrator, found by taking screenshots.** Capturing the
+walkthrough images meant running the screening scenario several times in an hour, which crossed
+the abuse monitor's five-refusal threshold: `admin` was suspended, its tokens revoked, and the
+audit and analytics panels came back empty. Nothing was broken — the control did exactly what
+it was built to do, to the person operating it. *Fixed by having the seeder re-enable the demo
+accounts it owns on startup, and by saying so in the scenario's own verdict text. The finding
+worth keeping is that no test caught this and no test should have: each one starts from a clean
+database, and the behaviour only appears when the same actor repeats an action across sessions.
+Running the thing for real remains the only way to find that class of bug.*
+
+**26. An unhelpful failure report in the screenshot script.** The capture run reported
+`[eval] Uncaught` and nothing else, which located the fault in a thirty-step script no better
+than silence would have. *Rewritten to name the selector and carry the exception description.
+A diagnostic that tells you something failed without telling you what is worse than no
+diagnostic, because it looks like you have one.*
+
 ## Where AI was most and least useful
 
 **Most:** mechanical breadth. Boilerplate, DTO and mapper code, the Lua token bucket,

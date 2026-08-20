@@ -5,8 +5,13 @@ import com.example.shortener.domain.ShortLink;
 import com.example.shortener.repository.ClickEventRepository;
 import com.example.shortener.repository.IdAllocator;
 import com.example.shortener.repository.ShortLinkRepository;
+import com.example.shortener.security.audit.AuditAction;
+import com.example.shortener.security.audit.AuditLog;
 import com.example.shortener.service.error.AliasAlreadyTakenException;
 import com.example.shortener.service.error.LinkNotFoundException;
+import com.example.shortener.service.error.LinkQuarantinedException;
+import com.example.shortener.service.error.UrlBlockedException;
+import com.example.shortener.service.screening.UrlScreeningService;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -30,6 +35,9 @@ public class ShortLinkService {
     private final LinkCache cache;
     private final ClickRecorder clickRecorder;
     private final UrlFingerprint fingerprint;
+    private final UrlScreeningService screener;
+    private final AbuseMonitor abuseMonitor;
+    private final AuditLog audit;
 
     public ShortLinkService(ShortLinkRepository links,
                             ClickEventRepository clicks,
@@ -38,7 +46,10 @@ public class ShortLinkService {
                             UrlValidator urlValidator,
                             LinkCache cache,
                             ClickRecorder clickRecorder,
-                            UrlFingerprint fingerprint) {
+                            UrlFingerprint fingerprint,
+                            UrlScreeningService screener,
+                            AbuseMonitor abuseMonitor,
+                            AuditLog audit) {
         this.links = links;
         this.clicks = clicks;
         this.idAllocator = idAllocator;
@@ -47,6 +58,9 @@ public class ShortLinkService {
         this.cache = cache;
         this.clickRecorder = clickRecorder;
         this.fingerprint = fingerprint;
+        this.screener = screener;
+        this.abuseMonitor = abuseMonitor;
+        this.audit = audit;
     }
 
     /**
@@ -75,6 +89,15 @@ public class ShortLinkService {
         // id space becomes a record of how often people typo a URL.
         String url = urlValidator.validateAndNormalize(rawUrl);
 
+        // Screening runs after structural validation and before an id is allocated. A refused
+        // destination should cost the caller nothing and the service nothing: no sequence
+        // value burned, no row written, no code minted that has to be cleaned up later.
+        UrlScreeningService.Decision screening = screener.screen(url);
+        if (!screening.allowed()) {
+            abuseMonitor.recordBlockedCreation(createdBy, url);
+            throw new UrlBlockedException();
+        }
+
         boolean custom = requestedAlias != null && !requestedAlias.isBlank();
         boolean reusable = !custom && expiresAt == null && !forceNew && createdBy != null;
         String urlHash = reusable ? fingerprint.of(url) : null;
@@ -94,6 +117,7 @@ public class ShortLinkService {
         }
 
         ShortLink link = new ShortLink(id, code, url, custom, createdBy, expiresAt, urlHash);
+        link.recordScreening(screening.status(), Instant.now());
         try {
             return new Creation(links.saveAndFlush(link), false);
         } catch (DataIntegrityViolationException e) {
@@ -134,6 +158,9 @@ public class ShortLinkService {
         Optional<LinkCache.CacheEntry> cached = cache.lookup(code);
         if (cached.isPresent()) {
             LinkCache.CacheEntry entry = cached.get();
+            if (entry.isQuarantined()) {
+                throw new LinkQuarantinedException();
+            }
             if (entry.knownMiss()) {
                 throw new LinkNotFoundException(code);
             }
@@ -143,6 +170,13 @@ public class ShortLinkService {
         }
 
         ShortLink link = links.findByCode(code).orElse(null);
+        // Checked before resolvability, because a quarantined link is also unresolvable and
+        // the order decides whether the visitor is told the link was taken down or is left
+        // to conclude the site is broken.
+        if (link != null && link.isQuarantined()) {
+            cache.putQuarantined(code);
+            throw new LinkQuarantinedException();
+        }
         if (link == null || !link.isResolvable(Instant.now())) {
             cache.putMiss(code);
             throw new LinkNotFoundException(code);
@@ -164,6 +198,8 @@ public class ShortLinkService {
         // Evict after the write so a concurrent read cannot repopulate the cache from
         // the pre-deactivation state.
         cache.evict(code);
+        audit.recordQuietly(AuditAction.LINK_RETIRED, AuditAction.OUTCOME_APPLIED,
+                AuditAction.TARGET_LINK, code, null);
     }
 
     /**
@@ -181,6 +217,14 @@ public class ShortLinkService {
     public ShortLink requireOwned(String code, Principal principal) {
         ShortLink link = links.findByCode(code).orElseThrow(() -> new LinkNotFoundException(code));
         if (principal.admin()) {
+            // Administrator access to somebody else's link is exactly the privileged action an
+            // audit trail exists for. Recorded quietly: refusing a legitimate operator because
+            // the trail could not be written would be the wrong trade during an incident,
+            // which is when this access is most likely to be needed.
+            if (link.getCreatedBy() != null && !link.getCreatedBy().equalsIgnoreCase(principal.username())) {
+                audit.recordQuietly(AuditAction.ADMIN_LINK_ACCESS, AuditAction.OUTCOME_APPLIED,
+                        AuditAction.TARGET_LINK, code, "owner: " + link.getCreatedBy());
+            }
             return link;
         }
         if (link.getCreatedBy() == null || !link.getCreatedBy().equalsIgnoreCase(principal.username())) {

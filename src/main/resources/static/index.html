@@ -1,0 +1,175 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Shortener Console</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/console.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">
+    <span class="mark" aria-hidden="true"></span>
+    <div>
+      <h1>Shortener Console</h1>
+      <p>A window onto the API — every call is shown on the wire, with its status and headers.</p>
+    </div>
+  </div>
+  <div class="who" id="who">
+    <span class="pill pill-idle" id="whoBadge">Not signed in</span>
+  </div>
+</header>
+
+<main class="layout">
+
+  <!-- ── Session ─────────────────────────────────────────────────────────── -->
+  <section class="col">
+    <article class="card">
+      <h2>Session</h2>
+      <p class="hint">The demo accounts differ only in role. Sign in as the administrator to
+        reach the audit trail and the blocklist.</p>
+
+      <div class="row gap" id="loginRow">
+        <button class="btn" data-login="alice">Sign in as alice</button>
+        <button class="btn" data-login="admin">Sign in as admin</button>
+      </div>
+
+      <div class="hidden" id="sessionDetail">
+        <h3>Token</h3>
+        <p class="hint">Decoded in the browser, never sent anywhere. The signature is not
+          checked here — only the server can do that.</p>
+        <dl class="kv" id="claims"></dl>
+
+        <div class="row gap wrap">
+          <button class="btn btn-warn" id="revokeBtn">Revoke this token</button>
+          <button class="btn btn-warn" id="revokeAllBtn">Revoke all my tokens</button>
+          <button class="btn btn-ghost" id="signOutBtn">Sign out locally</button>
+        </div>
+        <p class="hint" id="revokeHint">
+          Revoking needs Redis. Without it the endpoint answers <code>503</code> rather than
+          claiming a success it cannot deliver.
+        </p>
+      </div>
+    </article>
+
+    <article class="card">
+      <h2>Scenarios</h2>
+      <p class="hint">Each one drives the real API and leaves its evidence in the wire log.
+        Sign in first.</p>
+      <div class="scenarios" id="scenarios">
+        <button class="scenario" data-scenario="dedup" disabled>
+          <b>Same URL twice</b>
+          <span>Expect <code>201</code> then <code>200</code> with an identical code</span>
+        </button>
+        <button class="scenario" data-scenario="blocked" disabled>
+          <b>Hostile destination</b>
+          <span>Expect <code>422</code>, and nothing written</span>
+        </button>
+        <button class="scenario" data-scenario="retired" disabled>
+          <b>Retire, then visit</b>
+          <span>Expect <code>404</code> — never <code>403</code></span>
+        </button>
+        <button class="scenario" data-scenario="quarantine" disabled data-admin>
+          <b>Destination turns hostile</b>
+          <span>Block it, sweep, expect <code>410</code></span>
+        </button>
+        <button class="scenario" data-scenario="ratelimit" disabled>
+          <b>Exceed the rate limit</b>
+          <span>Expect <code>429</code> with <code>Retry-After</code></span>
+        </button>
+        <button class="scenario" data-scenario="revoked" disabled>
+          <b>Use a revoked token</b>
+          <span>Expect <code>401</code> on the next call</span>
+        </button>
+      </div>
+    </article>
+
+    <article class="card hidden" id="adminCard">
+      <h2>Administration</h2>
+      <div class="row gap wrap">
+        <input class="input grow" id="blockDomain" placeholder="host to block, e.g. evil.example">
+        <button class="btn" id="blockBtn">Block</button>
+      </div>
+      <p class="hint">Blocking takes effect immediately and covers every subdomain.</p>
+      <div class="row gap wrap">
+        <button class="btn btn-ghost" id="rescanBtn">Re-screen every live link</button>
+        <button class="btn btn-ghost" id="auditBtn">Refresh audit trail</button>
+      </div>
+      <div class="audit" id="audit"></div>
+    </article>
+  </section>
+
+  <!-- ── Workspace ───────────────────────────────────────────────────────── -->
+  <section class="col">
+    <article class="card">
+      <h2>Shorten a URL</h2>
+      <form id="createForm" autocomplete="off">
+        <label class="field">
+          <span>Destination</span>
+          <input class="input" id="url" value="https://example.com/a-fairly-long-destination"
+                 required>
+        </label>
+        <div class="row gap wrap">
+          <label class="field grow">
+            <span>Custom alias <em>optional</em></span>
+            <input class="input" id="alias" placeholder="3–32 characters">
+          </label>
+          <label class="field grow">
+            <span>Expires <em>optional</em></span>
+            <input class="input" id="expiresAt" type="datetime-local">
+          </label>
+        </div>
+        <label class="check">
+          <input type="checkbox" id="forceNew">
+          <span>Force a new code even if I already have one for this URL</span>
+        </label>
+        <button class="btn btn-primary" type="submit" id="createBtn" disabled>Create short link</button>
+      </form>
+      <p class="hint">Submitting a URL you have already shortened returns the existing link with
+        <code>200</code> instead of creating a second one with <code>201</code>. The status is the
+        signal — a client retrying after a timeout can tell whether its first attempt landed.</p>
+    </article>
+
+    <article class="card">
+      <div class="row between">
+        <h2>Your links</h2>
+        <span class="hint" id="linkCount"></span>
+      </div>
+      <p class="hint">Held in this browser, because the API has no "list my links" endpoint —
+        a real gap, recorded rather than hidden.</p>
+      <div id="links" class="links"></div>
+    </article>
+
+    <article class="card hidden" id="statsCard">
+      <div class="row between">
+        <h2>Analytics <span class="mono" id="statsCode"></span></h2>
+        <button class="btn btn-ghost btn-sm" id="closeStats">Close</button>
+      </div>
+      <div class="metrics" id="metrics"></div>
+      <div id="daily"></div>
+      <p class="hint" id="statsNote"></p>
+    </article>
+  </section>
+
+  <!-- ── Wire log ────────────────────────────────────────────────────────── -->
+  <aside class="col">
+    <article class="card sticky">
+      <div class="row between">
+        <h2>On the wire</h2>
+        <button class="btn btn-ghost btn-sm" id="clearWire">Clear</button>
+      </div>
+      <p class="hint">Most of this system's design shows up as a status code or a header, so
+        this panel is the demonstration. Click any entry to expand it.</p>
+      <div class="wire" id="wire">
+        <p class="empty">No requests yet.</p>
+      </div>
+    </article>
+  </aside>
+
+</main>
+
+<script src="/console.js"></script>
+</body>
+</html>

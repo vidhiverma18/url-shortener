@@ -35,6 +35,11 @@ server:
   error:
     include-stacktrace: never
   shutdown: graceful
+  # Honour X-Forwarded-Proto from the TLS-terminating proxy. Without this the app believes
+  # every request arrived over plain HTTP, and Spring Security suppresses the HSTS header on
+  # non-secure requests — so HSTS would be configured, appear correct in code, and never
+  # actually be sent.
+  forward-headers-strategy: framework
 
 management:
   endpoints:
@@ -64,10 +69,44 @@ shortener:
   cache-circuit-failure-threshold: 5
   cache-circuit-cooldown: 5s
   security:
-    jwt-secret: ${SHORTENER_JWT_SECRET:local-development-signing-key-change-me-please-32b}
+    # No default. A signing key committed to a repository is a published private key, so when
+    # this is unset the application generates a random one and warns; see ADR-011.
+    jwt-secret: ${SHORTENER_JWT_SECRET:}
+    # Preferred over the environment variable: env vars leak through /proc, crash dumps and
+    # container inspection APIs. Point this at a Docker or Kubernetes secret mount.
+    jwt-secret-file: ${SHORTENER_JWT_SECRET_FILE:}
+    # Whether an unreachable revocation store rejects tokens or accepts them. False trades
+    # prompt revocation for staying up during a Redis outage; the short token TTL is what
+    # makes that trade survivable.
+    revocation-fail-closed: ${SHORTENER_REVOCATION_FAIL_CLOSED:false}
     token-ttl: 1h
     login-attempts-per-minute: 10
     seed-demo-users: ${SHORTENER_SEED_DEMO_USERS:true}
+  screening:
+    enabled: ${SHORTENER_SCREENING_ENABLED:true}
+    # Static baseline. Operators add to this at runtime via POST /api/v1/admin/blocked-domains,
+    # because blocking a domain is a minutes-scale decision and a redeploy is not.
+    blocked-domains: []
+    # An unreachable reputation provider lets the link through and leaves it PENDING for the
+    # rescan sweep, rather than stopping link creation because a third party is down.
+    fail-open: true
+    # Safe Browsing stays off until a key is supplied, so the service has no hard third-party
+    # dependency out of the box.
+    safe-browsing-api-key: ${SHORTENER_SAFE_BROWSING_KEY:}
+    provider-timeout: 2s
+    rescan-after: 24h
+    rescan-interval: PT15M
+    rescan-batch-size: 100
+    blocklist-refresh-ms: 60000
+  abuse:
+    # Refused creations within the window before the account is suspended. Rate limiting caps
+    # how fast someone tries; this responds to what they are trying.
+    blocked-creation-threshold: 5
+    blocked-creation-window: 1h
+    auto-suspend: true
+    # Flagged for review only. A spike looks the same whether the campaign is legitimate or
+    # not, and taking down a real viral link is the more expensive mistake.
+    click-velocity-per-minute: 600
   analytics:
     flush-interval-ms: 1000
 

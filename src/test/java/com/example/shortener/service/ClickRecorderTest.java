@@ -23,7 +23,7 @@ import static org.mockito.Mockito.when;
 class ClickRecorderTest {
 
     private final ClickEventRepository repository = mock(ClickEventRepository.class);
-    private final ClickRecorder recorder = new ClickRecorder(repository);
+    private final ClickRecorder recorder = new ClickRecorder(repository, mock(AbuseMonitor.class));
 
     @Test
     void bufferedEventsArePersistedOnFlush() {

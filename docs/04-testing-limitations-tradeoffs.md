@@ -2,9 +2,9 @@
 
 ## Testing approach
 
-93 tests, in two tiers, plus a repeatable load and failure drill in `scripts/spike-test.py`.
+137 tests, in two tiers, plus a repeatable load and failure drill in `scripts/spike-test.py`.
 
-**Unit tests (42)** run with no infrastructure and target the components where a bug is
+**Unit tests (63)** run with no infrastructure and target the components where a bug is
 silent rather than loud.
 
 - `ShortCodeCodecTest` tests the uniqueness claim as a *property*, not by example:
@@ -22,9 +22,29 @@ content type, non-numeric parameters — every one of which reported `500` until
 was corrected. It also asserts that error bodies never contain a package or class name, so
 the contract cannot start leaking internals unnoticed.
 
-**Integration tests (30)** run the whole application against real PostgreSQL with the
+- `JwtKeyRingTest` and `TokenRevocationTest` concentrate on absent or broken configuration and
+  on the Redis-outage path, because those are the branches nobody exercises deliberately and
+  both have security consequences. The fail-open behaviour is asserted explicitly: it is a
+  deliberate weakening, and a deliberate weakening should fail loudly if someone reverses it
+  by accident.
+- `AbuseMonitorTest` pins the asymmetry between the two abuse signals — refused creations
+  suspend an account, click spikes only raise a flag — so neither can be quietly collapsed
+  into the other.
+
+**Integration tests (74)** run the whole application against real PostgreSQL with the
 production Flyway migrations. They cover the API contract end to end, including the
 degraded paths.
+
+`SecurityControlsIntegrationTest` drives screening, quarantine and the audit trail through the
+API rather than the service layer, so it also covers the wiring. It asserts that a refused
+destination writes nothing at all, that the refusal names no check, that a link whose
+destination turns hostile is quarantined by the sweep and then answers `410`, and — because
+Redis is absent in this profile — that a revocation request answers `503` rather than claiming
+a success it cannot deliver.
+
+The audit trail's immutability is tested against the database, not the application: the test
+issues raw `UPDATE` and `DELETE` and asserts both are refused. Testing it through the
+repository would only prove that the code does not currently try.
 
 `SecurityIntegrationTest` is deliberately weighted towards the negative cases, because
 anything can be made to work for an authorized caller. It asserts that anonymous and
@@ -32,6 +52,14 @@ tampered-token requests are refused, that the two credential-failure responses a
 *byte-identical* so the login endpoint cannot enumerate usernames, that one user cannot read
 or retire another's link, that ownerless links are administrator-only, and that the public
 redirect stays public.
+
+Four of its cases cover the demo console, and none of them check that it looks right. They
+assert that its files are served anonymously, that an unlisted file in the same directory is
+still refused — which is what would fail if someone replaced the individual permits with a
+`/**` wildcard — that a console filename still falls outside the short-code pattern, and that
+the page is served under the strict CSP with `script-src 'self'` and no `unsafe-inline`. That
+last one fails the day the console needs the policy weakened, which is the point at which
+someone should have to justify it.
 
 Two choices there are worth defending:
 
@@ -116,11 +144,13 @@ read-modify-write would have let more than 20 through.
 | Circuit breaker counts consecutive failures, not a sliding window | A dependency failing intermittently at 40% will not trip it | The mode it defends against — a hung server — fails every call, not some ([ADR-009](decisions/ADR-009-circuit-breaking.md)) |
 | Breaker state is not exported as a metric | An operator sees transitions in logs but cannot alert on them cleanly | Should be a gauge before this runs anywhere real |
 | No rate limit on the redirect path | A distributed flood of valid codes is unthrottled | Redirects are the product; negative caching already blunts scanners, and this belongs at the edge |
-| Tokens cannot be revoked before expiry | Disabling a user does not invalidate a token already issued | Price of stateless verification; the 1-hour TTL is the revocation window ([ADR-008](decisions/ADR-008-authentication-and-ownership.md)) |
+| Revocation fails open | A Redis outage suspends revocation, so a withdrawn token keeps working until it expires | Failing closed turns a cache outage into an authentication outage; the short TTL is the guarantee that always holds, and `revocation-fail-closed` inverts it ([ADR-011](decisions/ADR-011-security-and-abuse-controls.md)) |
 | No user self-registration or password rotation | Accounts are seeded or inserted directly | Account lifecycle is a product surface of its own, not a shortener feature |
-| Single shared signing secret | Compromise forges any token; rotation invalidates every live token at once | Asymmetric keys with a JWKS endpoint are the fix when there is more than one verifier |
+| Signing keys are symmetric, even though they now rotate | Every verifier needs the secret, so a compromise anywhere forges tokens everywhere | Rotation and `kid` selection are in place ([ADR-011](decisions/ADR-011-security-and-abuse-controls.md)); asymmetric keys with a JWKS endpoint are the fix once there is more than one verifier |
 | SSRF defence is literal-IP only | A hostname resolving to a private address is not caught | DNS rebinding defeats resolve-time checks; egress rules are the real control ([ADR-006](decisions/ADR-006-url-safety.md)) |
-| No malware or phishing feed | A benign domain that turns hostile keeps resolving | Needs a live reputation service and an async re-check pipeline |
+| Screening ships with an empty blocklist and no feed | Out of the box it refuses nothing until a domain is added or a Safe Browsing key is configured | The mechanism, the rescan sweep and the operator controls are the hard part and are complete; the data is a subscription decision ([ADR-011](decisions/ADR-011-security-and-abuse-controls.md)) |
+| The rescan sweep runs on every instance | Duplicated work once horizontally scaled | Batches are capped and re-screening is idempotent, so it is wasteful rather than wrong; needs a lock or a dedicated worker before scale-out |
+| `audit_events` grows without bound | Same storage problem as `click_events`, and more pressing | Retention here is a legal question before it is a technical one |
 | Analytics are lossy | Buffered events lost on kill; dropped under overload | Deliberate ([ADR-004](decisions/ADR-004-async-analytics.md)), surfaced in every stats response |
 | Rate limiting fails open | A Redis outage means unlimited creation | Wrong default for a paid API; flagged in [ADR-005](decisions/ADR-005-rate-limiting.md) with the one-method fix |
 | Single-region, single database | No horizontal read scaling, no failover story | Correct for a prototype; the seams for change are identified in [architecture](02-architecture.md) |

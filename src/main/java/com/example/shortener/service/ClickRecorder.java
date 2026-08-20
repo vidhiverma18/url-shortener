@@ -42,9 +42,11 @@ public class ClickRecorder {
     private final BlockingQueue<ClickEvent> buffer = new ArrayBlockingQueue<>(BUFFER_CAPACITY);
     private final AtomicLong droppedEvents = new AtomicLong();
     private final ClickEventRepository repository;
+    private final AbuseMonitor abuseMonitor;
 
-    public ClickRecorder(ClickEventRepository repository) {
+    public ClickRecorder(ClickEventRepository repository, AbuseMonitor abuseMonitor) {
         this.repository = repository;
+        this.abuseMonitor = abuseMonitor;
     }
 
     /** Non-blocking. Returns false when the event was shed because the buffer is full. */
@@ -76,6 +78,17 @@ public class ClickRecorder {
      * own transaction, which also gives each batch an independent failure boundary.
      */
     void persist(List<ClickEvent> batch) {
+        // Abuse detection rides on the flush rather than the redirect, so watching traffic
+        // for hostile patterns costs the hot path nothing. It runs before the insert and in
+        // its own guard: a signal worth acting on should not be lost because the analytics
+        // write failed, and it must not be able to break that write either.
+        try {
+            abuseMonitor.observe(batch.stream().collect(java.util.stream.Collectors.toMap(
+                    ClickEvent::getShortLinkId, event -> 1, Integer::sum)));
+        } catch (RuntimeException e) {
+            log.warn("Abuse observation failed for batch of {}: {}", batch.size(), e.toString());
+        }
+
         try {
             repository.saveAll(batch);
         } catch (RuntimeException e) {

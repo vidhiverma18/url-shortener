@@ -4,6 +4,8 @@ import com.example.shortener.service.error.AliasAlreadyTakenException;
 import com.example.shortener.service.error.InvalidAliasException;
 import com.example.shortener.service.error.InvalidUrlException;
 import com.example.shortener.service.error.LinkNotFoundException;
+import com.example.shortener.service.error.LinkQuarantinedException;
+import com.example.shortener.service.error.UrlBlockedException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpHeaders;
@@ -57,6 +59,21 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
     @ExceptionHandler(AliasAlreadyTakenException.class)
     public ProblemDetail handleConflict(AliasAlreadyTakenException e) {
         return problem(HttpStatus.CONFLICT, "Alias unavailable", e.getMessage(), "alias-taken");
+    }
+
+    /**
+     * 422 rather than 400: the request was well formed and understood, and was refused on
+     * policy grounds. 403 would be wrong in the other direction — nothing is wrong with the
+     * caller's authorization, only with where they are pointing.
+     */
+    @ExceptionHandler(UrlBlockedException.class)
+    public ProblemDetail handleBlockedUrl(UrlBlockedException e) {
+        return problem(HttpStatus.UNPROCESSABLE_ENTITY, "Destination refused", e.getMessage(), "destination-blocked");
+    }
+
+    @ExceptionHandler(LinkQuarantinedException.class)
+    public ProblemDetail handleQuarantined(LinkQuarantinedException e) {
+        return problem(HttpStatus.GONE, "Link disabled", e.getMessage(), "link-quarantined");
     }
 
     @ExceptionHandler(RateLimitExceededException.class)

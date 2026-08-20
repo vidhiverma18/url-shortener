@@ -1,10 +1,14 @@
 package com.example.shortener.api;
 
+import com.example.shortener.domain.AppUser;
+import com.example.shortener.repository.AppUserRepository;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.ApplicationRunner;
+import org.springframework.boot.DefaultApplicationArguments;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.http.HttpHeaders;
@@ -17,10 +21,15 @@ import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
 import org.testcontainers.containers.PostgreSQLContainer;
 
+import java.nio.charset.StandardCharsets;
+import java.util.Base64;
+
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.forwardedUrl;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -66,6 +75,12 @@ class SecurityIntegrationTest {
     @Autowired
     private JdbcTemplate jdbcTemplate;
 
+    @Autowired
+    private AppUserRepository appUsers;
+
+    @Autowired
+    private ApplicationRunner seedDemoUsers;
+
     private String alice;
     private String bob;
     private String admin;
@@ -103,14 +118,44 @@ class SecurityIntegrationTest {
                         .content("{\"url\":\"https://example.com\"}"))
                 .andExpect(status().isUnauthorized());
 
-        // Same token with its final signature character altered: a valid structure that
-        // must fail verification.
-        String tampered = alice.substring(0, alice.length() - 1)
-                + (alice.endsWith("A") ? "B" : "A");
+        // Altering the *first* signature character, not the last. An HS256 signature is 32
+        // bytes encoded as 43 base64url characters, which carry 258 bits — so the final
+        // character's low 2 bits are padding and decode to nothing. Flipping it produces a
+        // different-looking token with a byte-identical signature that verifies correctly,
+        // which is exactly how the earlier version of this test managed to pass a forged
+        // token and still report success.
+        String[] parts = alice.split("\\.");
+        String signature = parts[2];
+        String resigned = (signature.startsWith("A") ? "B" : "A") + signature.substring(1);
+        assertThat(Base64.getUrlDecoder().decode(resigned))
+                .as("the tampered signature must differ in decoded bytes, not just in text")
+                .isNotEqualTo(Base64.getUrlDecoder().decode(signature));
+
         mockMvc.perform(post("/api/v1/links")
-                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + tampered)
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + parts[0] + "." + parts[1] + "." + resigned)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"url\":\"https://example.com\"}"))
+                .andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    @DisplayName("a token whose claims are edited to grant ADMIN is refused")
+    void privilegeEscalationByClaimEditingIsRefused() throws Exception {
+        String[] parts = alice.split("\\.");
+        String payload = new String(Base64.getUrlDecoder().decode(parts[1]), StandardCharsets.UTF_8);
+        String escalated = payload.replace("\"USER\"", "\"ADMIN\"");
+        assertThat(escalated).as("the payload must actually change").isNotEqualTo(payload);
+
+        String forged = parts[0] + "."
+                + Base64.getUrlEncoder().withoutPadding()
+                        .encodeToString(escalated.getBytes(StandardCharsets.UTF_8))
+                + "." + parts[2];
+
+        // The signature covers header and payload, so rewriting roles invalidates it. This is
+        // the attack the whole signing scheme exists to stop, so it is worth asserting
+        // directly rather than inferring it from a generic "bad token" case.
+        mockMvc.perform(get("/actuator/metrics")
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + forged))
                 .andExpect(status().isUnauthorized());
     }
 
@@ -231,6 +276,89 @@ class SecurityIntegrationTest {
         String owner = jdbcTemplate.queryForObject(
                 "SELECT created_by FROM short_links WHERE code = ?", String.class, code);
         assertThat(owner).isEqualTo("alice");
+    }
+
+    // --- the demo console -------------------------------------------------------------
+
+    @Test
+    @DisplayName("the console is served anonymously, since it holds no secrets of its own")
+    void consoleIsPublic() throws Exception {
+        // Spring Boot answers "/" by forwarding to the welcome page, so MockMvc records the
+        // forward target rather than the rendered body. The body itself is asserted on the
+        // direct path below.
+        mockMvc.perform(get("/"))
+                .andExpect(status().isOk())
+                .andExpect(forwardedUrl("index.html"));
+
+        mockMvc.perform(get("/index.html"))
+                .andExpect(status().isOk())
+                .andExpect(content().string(org.hamcrest.Matchers.containsString("Shortener Console")));
+
+        for (String asset : new String[] {"/console.js", "/console.css", "/favicon.svg"}) {
+            mockMvc.perform(get(asset)).andExpect(status().isOk());
+        }
+    }
+
+    @Test
+    @DisplayName("serving the console did not widen the default-deny rule")
+    void unlistedPathsAreStillDenied() throws Exception {
+        // The console is permitted by exact filename rather than by a /** wildcard, so a file
+        // that happens to land in the static directory is not published by accident. This is
+        // the assertion that would fail if someone later reached for the wildcard.
+        mockMvc.perform(get("/secrets.txt")).andExpect(status().isUnauthorized());
+        mockMvc.perform(get("/secrets.txt")
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + alice))
+                .andExpect(status().isForbidden());
+        mockMvc.perform(get("/console.js.map")
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + admin))
+                .andExpect(status().isForbidden());
+    }
+
+    @Test
+    @DisplayName("console filenames fall outside the short-code pattern, so the redirect cannot shadow them")
+    void consoleAssetsAreNotMistakenForShortCodes() throws Exception {
+        // The redirect endpoint owns the root namespace via [A-Za-z0-9_-]{3,32}. A dot is
+        // outside that class, which is the only reason /console.js reaches the static handler
+        // at all — a route named /dashboard would be answered as a missing link instead.
+        mockMvc.perform(get("/console.js"))
+                .andExpect(status().isOk())
+                .andExpect(content().string(org.hamcrest.Matchers.containsString("shortener.links.")));
+    }
+
+    @Test
+    @DisplayName("the console runs under the strict CSP rather than requiring it be relaxed")
+    void consoleIsServedUnderTheStrictPolicy() throws Exception {
+        // No inline script and no CDN in the console means script-src can stay at 'self'. If a
+        // future change needs 'unsafe-inline' to make the page work, this is where that shows up.
+        mockMvc.perform(get("/"))
+                .andExpect(header().string("Content-Security-Policy",
+                        org.hamcrest.Matchers.containsString("script-src 'self';")))
+                .andExpect(header().string("Content-Security-Policy",
+                        org.hamcrest.Matchers.not(org.hamcrest.Matchers.containsString("script-src 'self' 'unsafe-inline'"))));
+    }
+
+    @Test
+    @DisplayName("the seeder restores a demo account that suspended itself")
+    void suspendedDemoAccountsAreRestoredOnStartup() throws Exception {
+        // Five refused creations in an hour suspends an account and revokes its tokens, which
+        // the screening scenario reaches after a handful of runs. Nothing in the product lifts
+        // a suspension, so without this the demo works exactly once.
+        AppUser suspended = appUsers.findByUsername("bob").orElseThrow();
+        suspended.disable();
+        appUsers.save(suspended);
+
+        mockMvc.perform(post("/api/v1/auth/token")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"username\":\"bob\",\"password\":\"bob-password\"}"))
+                .andExpect(status().isUnauthorized());
+
+        seedDemoUsers.run(new DefaultApplicationArguments());
+
+        assertThat(appUsers.findByUsername("bob").orElseThrow().isEnabled()).isTrue();
+        mockMvc.perform(post("/api/v1/auth/token")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"username\":\"bob\",\"password\":\"bob-password\"}"))
+                .andExpect(status().isOk());
     }
 
     private MvcResult create(String token, String url) throws Exception {

@@ -1,7 +1,9 @@
 package com.example.shortener.security;
 
-import com.example.shortener.config.ShortenerProperties;
-import com.nimbusds.jose.jwk.source.ImmutableSecret;
+import com.nimbusds.jose.JWSAlgorithm;
+import com.nimbusds.jose.proc.JWSVerificationKeySelector;
+import com.nimbusds.jose.proc.SecurityContext;
+import com.nimbusds.jwt.proc.DefaultJWTProcessor;
 import jakarta.servlet.DispatcherType;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -10,37 +12,76 @@ import org.springframework.security.authentication.AuthenticationManager;
 import org.springframework.security.authentication.dao.DaoAuthenticationProvider;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
+import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity;
 import org.springframework.security.config.http.SessionCreationPolicy;
 import org.springframework.security.core.userdetails.UserDetailsService;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.security.oauth2.core.DelegatingOAuth2TokenValidator;
 import org.springframework.security.oauth2.jose.jws.MacAlgorithm;
 import org.springframework.security.oauth2.jwt.JwtDecoder;
 import org.springframework.security.oauth2.jwt.JwtEncoder;
+import org.springframework.security.oauth2.jwt.JwtValidators;
 import org.springframework.security.oauth2.jwt.NimbusJwtDecoder;
 import org.springframework.security.oauth2.jwt.NimbusJwtEncoder;
 import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationConverter;
 import org.springframework.security.oauth2.server.resource.authentication.JwtGrantedAuthoritiesConverter;
 import org.springframework.security.web.SecurityFilterChain;
+import org.springframework.security.web.header.writers.ReferrerPolicyHeaderWriter;
 
-import javax.crypto.spec.SecretKeySpec;
-import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 
 @Configuration
 @EnableWebSecurity
+@EnableMethodSecurity
 public class SecurityConfig {
 
     static final MacAlgorithm JWS_ALGORITHM = MacAlgorithm.HS256;
-    private static final int MINIMUM_SECRET_BYTES = 32;
 
     /** Matches the short-code charset so the public rule cannot be widened by accident. */
     private static final String REDIRECT_PATTERN = "/{code:[A-Za-z0-9_-]{3,32}}";
+
+    static final String ISSUER = "url-shortener";
+
+    /**
+     * The service returns JSON and redirects, so almost nothing needs to load. {@code 'self'}
+     * for scripts and styles exists only because Swagger UI is served from the same origin;
+     * without it the documentation page renders blank, which is the usual reason a strict
+     * policy gets weakened later in a hurry and much further than necessary.
+     *
+     * <p>{@code frame-ancestors 'none'} is the load-bearing directive: it stops the redirect
+     * endpoint being framed by a hostile page that wants the click without the address bar.
+     */
+    private static final String CONTENT_SECURITY_POLICY =
+            "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
+                    + "img-src 'self' data:; font-src 'self'; connect-src 'self'; "
+                    + "base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
+
+    private static final String PERMISSIONS_POLICY =
+            "accelerometer=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), "
+                    + "microphone=(), payment=(), usb=()";
 
     @Bean
     public SecurityFilterChain filterChain(HttpSecurity http,
                                            ProblemDetailAuthenticationHandler problemHandler,
                                            JwtDecoder jwtDecoder) throws Exception {
         http
+                .headers(headers -> headers
+                        // Only emitted over HTTPS, which behind a TLS-terminating proxy means
+                        // the app must be told the original scheme. server.forward-headers-strategy
+                        // in application.yml is what makes this header appear in production;
+                        // without it HSTS is configured here and silently never sent.
+                        .httpStrictTransportSecurity(hsts -> hsts
+                                .includeSubDomains(true)
+                                .preload(true)
+                                .maxAgeInSeconds(Duration.ofDays(365).toSeconds()))
+                        .contentSecurityPolicy(csp -> csp.policyDirectives(CONTENT_SECURITY_POLICY))
+                        // Destinations still receive the short domain as referrer, which is how
+                        // link attribution works, but never the full short URL over plain HTTP.
+                        .referrerPolicy(referrer -> referrer
+                                .policy(ReferrerPolicyHeaderWriter.ReferrerPolicy.STRICT_ORIGIN_WHEN_CROSS_ORIGIN))
+                        .frameOptions(frame -> frame.deny())
+                        .permissionsPolicy(permissions -> permissions.policy(PERMISSIONS_POLICY)))
                 // No cookies and no server-side session, so there is no ambient authority
                 // for a forged cross-site request to ride on. CSRF protection defends
                 // against exactly that, and enabling it here would only break API clients.
@@ -56,12 +97,29 @@ public class SecurityConfig {
                         // it would break every link already shared with the world.
                         .requestMatchers(HttpMethod.GET, REDIRECT_PATTERN).permitAll()
 
+                        // The demo console, served from this application so it shares an
+                        // origin with the API — no CORS to configure and nothing for the
+                        // strict CSP to refuse.
+                        //
+                        // Named individually rather than as /** because default-deny is only
+                        // worth having if it is not quietly widened. Every filename here
+                        // contains a dot, which also keeps it outside the redirect pattern's
+                        // character class: /console.js cannot be mistaken for a short code,
+                        // whereas a route like /dashboard would be swallowed by it.
+                        .requestMatchers(HttpMethod.GET,
+                                "/", "/index.html", "/console.js", "/console.css", "/favicon.svg").permitAll()
+
                         .requestMatchers(HttpMethod.POST, "/api/v1/auth/token").permitAll()
                         .requestMatchers("/actuator/health", "/actuator/health/**").permitAll()
                         .requestMatchers("/v3/api-docs/**", "/swagger-ui/**", "/swagger-ui.html").permitAll()
 
                         // Metrics expose traffic shape and internal names; operators only.
                         .requestMatchers("/actuator/**").hasRole("ADMIN")
+
+                        // The audit trail and the blocklist are operator tools. Stated here as
+                        // well as on the controller so neither check is the only thing standing
+                        // between an edit and an exposed audit log.
+                        .requestMatchers("/api/v1/admin/**").hasRole("ADMIN")
 
                         .requestMatchers("/api/**").authenticated()
 
@@ -94,28 +152,31 @@ public class SecurityConfig {
         return converter;
     }
 
+    /**
+     * Verifies against every key in the ring, selecting by the token's {@code kid}, so a key
+     * can be rotated without invalidating tokens signed by its predecessor.
+     */
     @Bean
-    public JwtDecoder jwtDecoder(ShortenerProperties properties) {
-        return NimbusJwtDecoder.withSecretKey(signingKey(properties))
-                // Pinning the algorithm closes the "alg" confusion class of attack, where a
-                // token arrives asking to be verified with something weaker.
-                .macAlgorithm(JWS_ALGORITHM)
-                .build();
+    public JwtDecoder jwtDecoder(JwtKeyRing keyRing, TokenRevocationService revocations) {
+        DefaultJWTProcessor<SecurityContext> processor = new DefaultJWTProcessor<>();
+        // Pinning the algorithm closes the "alg" confusion class of attack, where a token
+        // arrives asking to be verified with something weaker than it was signed with.
+        processor.setJWSKeySelector(new JWSVerificationKeySelector<>(JWSAlgorithm.HS256, keyRing.jwkSource()));
+        // Claims are checked by the Spring validators below instead, so Nimbus must be told
+        // not to apply its own defaults on top and reject for reasons nothing reports.
+        processor.setJWTClaimsSetVerifier((claims, context) -> {
+        });
+
+        NimbusJwtDecoder decoder = new NimbusJwtDecoder(processor);
+        decoder.setJwtValidator(new DelegatingOAuth2TokenValidator<>(
+                JwtValidators.createDefaultWithIssuer(ISSUER),
+                new RevocationValidator(revocations)));
+        return decoder;
     }
 
     @Bean
-    public JwtEncoder jwtEncoder(ShortenerProperties properties) {
-        return new NimbusJwtEncoder(new ImmutableSecret<>(signingKey(properties)));
-    }
-
-    private SecretKeySpec signingKey(ShortenerProperties properties) {
-        byte[] secret = properties.getSecurity().getJwtSecret().getBytes(StandardCharsets.UTF_8);
-        if (secret.length < MINIMUM_SECRET_BYTES) {
-            throw new IllegalStateException(
-                    "shortener.security.jwt-secret must be at least " + MINIMUM_SECRET_BYTES
-                            + " bytes for " + JWS_ALGORITHM.getName() + "; refusing to start with a weak key");
-        }
-        return new SecretKeySpec(secret, JWS_ALGORITHM.getName());
+    public JwtEncoder jwtEncoder(JwtKeyRing keyRing) {
+        return new NimbusJwtEncoder(keyRing.jwkSource());
     }
 
     @Bean

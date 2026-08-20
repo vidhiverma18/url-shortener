@@ -2,6 +2,8 @@ package com.example.shortener.domain;
 
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
+import jakarta.persistence.EnumType;
+import jakarta.persistence.Enumerated;
 import jakarta.persistence.Id;
 import jakarta.persistence.Table;
 
@@ -42,6 +44,16 @@ public class ShortLink {
     @Column(name = "url_hash", length = 64)
     private String urlHash;
 
+    @Enumerated(EnumType.STRING)
+    @Column(name = "screening_status", nullable = false, length = 16)
+    private ScreeningStatus screeningStatus = ScreeningStatus.PENDING;
+
+    @Column(name = "screened_at")
+    private Instant screenedAt;
+
+    @Column(name = "quarantined_at")
+    private Instant quarantinedAt;
+
     protected ShortLink() {
     }
 
@@ -79,6 +91,41 @@ public class ShortLink {
 
     public String getUrlHash() {
         return urlHash;
+    }
+
+    /**
+     * Disables the link because its destination was found hostile.
+     *
+     * <p>Separate from {@link #deactivate()} even though both clear {@code active}: the owner
+     * did not ask for this, so the redirect explains it rather than behaving as though the
+     * link never existed, and the timestamp is what lets an appeal be investigated.
+     */
+    public void quarantine(Instant when) {
+        this.active = false;
+        this.quarantinedAt = when;
+        this.screeningStatus = ScreeningStatus.BLOCKED;
+        this.screenedAt = when;
+    }
+
+    public void recordScreening(ScreeningStatus status, Instant when) {
+        this.screeningStatus = status;
+        this.screenedAt = when;
+    }
+
+    public boolean isQuarantined() {
+        return quarantinedAt != null;
+    }
+
+    public ScreeningStatus getScreeningStatus() {
+        return screeningStatus;
+    }
+
+    public Instant getScreenedAt() {
+        return screenedAt;
+    }
+
+    public Instant getQuarantinedAt() {
+        return quarantinedAt;
     }
 
     public Long getId() {

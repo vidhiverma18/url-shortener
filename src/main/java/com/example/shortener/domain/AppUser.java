@@ -74,6 +74,18 @@ public class AppUser {
         return enabled;
     }
 
+    /**
+     * Suspends the account. Blocks future logins only — tokens already issued stay valid
+     * until they expire, so a caller suspending an account must revoke its tokens too.
+     */
+    public void disable() {
+        this.enabled = false;
+    }
+
+    public void enable() {
+        this.enabled = true;
+    }
+
     public Instant getCreatedAt() {
         return createdAt;
     }
