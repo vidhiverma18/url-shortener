@@ -74,8 +74,14 @@ public class ShortLinkService {
     /**
      * Resolves a code for redirection. Reads the cache first, falls through to the
      * database, and records the outcome in the cache either way.
+     *
+     * <p>Deliberately <b>not</b> {@code @Transactional}. Spring begins the transaction
+     * before the method body runs, which borrows a connection from the pool ahead of the
+     * cache lookup; with the database down, a cache hit then failed with a 500 after
+     * blocking for the full connection timeout. The repository call below carries its own
+     * read-only transaction, so the database path is still correctly scoped while a cache
+     * hit now touches no connection at all.
      */
-    @Transactional(readOnly = true)
     public Resolution resolve(String code) {
         Optional<LinkCache.CacheEntry> cached = cache.lookup(code);
         if (cached.isPresent()) {

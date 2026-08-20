@@ -75,6 +75,20 @@ integration test. A specific handler now sits in front of it. *This one is worth
 precisely because the mistake made it into the code: the test suite caught what the review
 did not.*
 
+**8. `@Transactional(readOnly = true)` on the redirect resolution method.** Generated,
+reviewed, and **accepted — wrongly.** It reads as correct Spring practice for a method that
+may query the database. It is not: Spring begins the transaction before the method body,
+taking a pool connection *ahead of* the cache lookup, so a cache hit still depended on a
+healthy database. With PostgreSQL stopped, cached redirects returned 500 after a 3-second
+stall — while the architecture document confidently claimed they would keep working.
+
+Nothing in 55 tests caught it, because the failure only appears with the database actually
+down. It was found by running the failure drill instead of trusting the document. *The
+lesson is the one worth generalising: idiomatic-looking code passed review precisely because
+it looked idiomatic, and the claim in the docs was believed rather than tested. The
+annotation is gone, and `ShortLinkResolutionTest` now asserts its absence with the reason
+attached.*
+
 ## Where AI was most and least useful
 
 **Most:** mechanical breadth. Boilerplate, DTO and mapper code, the Lua token bucket,

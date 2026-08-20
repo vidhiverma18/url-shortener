@@ -85,13 +85,29 @@ fails at startup instead of at 3am.
 | Dependency fails | What happens | Why |
 | --- | --- | --- |
 | Redis unreachable | Redirects still work, served from PostgreSQL. Rate limiting stops enforcing. | Availability of the redirect path outranks enforcement. [ADR-005](decisions/ADR-005-rate-limiting.md) records why this is the wrong default for a paid API. |
-| PostgreSQL unreachable | Cached codes still redirect. Creation fails with 5xx. | Existing links keep working, which is the property users actually depend on. |
+| PostgreSQL unreachable | **Cached codes still redirect** (302 in ~6 ms). Uncached codes and creation fail with 500. Health reports DOWN. | Existing hot links keep working, which is the property users actually depend on. |
 | Analytics table unwritable | Redirects unaffected; events dropped and counted. | NFR-6, stated as a hard rule. |
 | Process killed | Buffered events lost (bounded by ~1s of traffic). | Accepted. [ADR-004](decisions/ADR-004-async-analytics.md). |
 
 Redis is excluded from the health indicator on purpose. A soft dependency that flips the
 readiness probe would take healthy pods out of rotation during a cache incident, converting
 a degradation into an outage.
+
+PostgreSQL is *not* excluded, so a database outage marks the instance DOWN. That is the
+right call for creation and for uncached reads, and the wrong one for the cached redirects
+that survive — an orchestrator will pull a pod that is still serving traffic correctly.
+Splitting liveness from readiness, so a database outage stops new traffic being routed for
+writes while cached redirects keep serving, is the next change here and is left explicit
+rather than silently accepted.
+
+### Verified, not assumed
+
+The table above was checked by stopping each dependency against a running instance. The
+first attempt failed: with PostgreSQL stopped, a cached redirect returned 500 after a
+3-second stall, because `resolve` was annotated `@Transactional(readOnly = true)` and Spring
+opened a transaction — taking a pool connection — before the cache was ever consulted. The
+annotation is gone and the drill now behaves as documented. The episode is why
+`ShortLinkResolutionTest` exists.
 
 ## What would change at scale
 

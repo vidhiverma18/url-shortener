@@ -43,15 +43,48 @@ The suite uses a database supplied by `TEST_DATASOURCE_URL` if present, and star
 Testcontainers PostgreSQL otherwise. Reusing an already-running database (CI service
 container, or the local Compose stack) avoids paying container startup on every run.
 
+## Manual verification against a running instance
+
+Some properties cannot be asserted from inside the test suite, because they require killing
+a dependency. These were exercised by hand against the live service, and the results are
+recorded here rather than assumed.
+
+**Dependency failure drills.** Each dependency was stopped in turn:
+
+| Condition | Cached redirect | Uncached redirect | Create |
+| --- | --- | --- | --- |
+| PostgreSQL stopped | `302` in ~6 ms | `500` | `500` |
+| Redis stopped | `302` in ~6 ms | `302` | `201` |
+| Both healthy | `302` in ~3 ms | `302` | `201` |
+
+The first run of this drill **failed** and exposed a real defect — see the note in
+[architecture](02-architecture.md#verified-not-assumed). `ShortLinkResolutionTest` now guards
+the regression.
+
+**Concurrency.** Driven with `xargs -P` against the running service:
+
+| Check | Result |
+| --- | --- |
+| 2,000 redirects, 100 in parallel | 2,000 × `302`, zero errors |
+| 200 creations, 50 in parallel, distinct API keys | 200 × `201` in under 500 ms |
+| Code uniqueness across 455 links | 455 rows, 455 distinct codes, 455 distinct ids — zero collisions |
+| 25 simultaneous claims of one alias | exactly 1 × `201`, 24 × `409` |
+| 40 rapid creations on one API key (burst 20) | exactly 20 × `201`, 20 × `429` |
+
+The alias result confirms the unique index is the real arbiter under contention, and the
+rate-limit result confirms the Lua script is genuinely atomic — a non-atomic
+read-modify-write would have let more than 20 through.
+
 ## What is not tested, stated plainly
 
-- **No load or latency test.** The p99 target in NFR-1 is a design intent, not a measured
-  result. Nothing here proves the service meets it.
-- **No concurrency test for alias claiming.** The unique index makes the race safe and the
-  handler converts it to a 409, but two simultaneous requests for the same alias are not
-  actually exercised.
+- **No load or latency test.** The p99 target in NFR-1 is a design intent. The concurrency
+  runs above show the service handles parallel traffic without errors, but they were driven
+  by a shell loop on the same machine and measure the harness as much as the server. They
+  are a smoke check, not a benchmark.
 - **No cache-coherence test under concurrent write and read.** Eviction ordering is reasoned
   about, not proven.
+- **The dependency drills are manual.** They should be an automated resilience suite that
+  pauses containers; today they rely on someone running the commands.
 - **No mutation testing**, so the tests' own sensitivity is unmeasured.
 - **The Dockerfile build is not exercised by the test suite.** `docker compose up --build`
   was not run to completion on the development machine, because its `/etc/hosts` blackholes
