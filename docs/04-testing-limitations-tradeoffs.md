@@ -2,7 +2,7 @@
 
 ## Testing approach
 
-67 tests, in two tiers.
+74 tests, in two tiers.
 
 **Unit tests (42)** run with no infrastructure and target the components where a bug is
 silent rather than loud.
@@ -17,7 +17,12 @@ silent rather than loud.
   sheds exactly 500 and reports it; a repository that throws abandons the batch rather than
   propagating into the redirect path.
 
-**Integration tests (23)** run the whole application against real PostgreSQL with the
+`ErrorContractIntegrationTest` covers malformed requests — bad JSON, wrong method, wrong
+content type, non-numeric parameters — every one of which reported `500` until the handler
+was corrected. It also asserts that error bodies never contain a package or class name, so
+the contract cannot start leaking internals unnoticed.
+
+**Integration tests (30)** run the whole application against real PostgreSQL with the
 production Flyway migrations. They cover the API contract end to end, including the
 degraded paths.
 

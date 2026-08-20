@@ -71,9 +71,20 @@ actually be enforced.
 
 **7. A generic `catch (Exception)` returning 500 as the only error handler.** Kept
 initially as a backstop, and it then swallowed a deliberate 400 into a 500 — caught by an
-integration test. A specific handler now sits in front of it. *This one is worth recording
+integration test. A specific handler was added in front of it. *This one is worth recording
 precisely because the mistake made it into the code: the test suite caught what the review
 did not.*
+
+**7b. The same defect, fixed only where it had been observed.** Adding a
+`ResponseStatusException` handler resolved the symptom that a test had caught, and the
+underlying fault — a catch-all advice intercepting exceptions before Spring can assign them
+a status — was left in place. Probing the API later showed *five* client errors still
+reported as `500`: malformed JSON, a non-numeric query parameter, an unsupported method, an
+unsupported content type, and an empty body. `GlobalExceptionHandler` now extends
+`ResponseEntityExceptionHandler`, so Spring's own mappings apply and the catch-all sees only
+genuinely unexpected failures. *The lesson is about the first fix, not the bug: it treated
+the failing test as the specification. The test described one instance of the fault; nothing
+prompted a check for the others, and a passing suite made it look finished.*
 
 **8. `@Transactional(readOnly = true)` on the redirect resolution method.** Generated,
 reviewed, and **accepted — wrongly.** It reads as correct Spring practice for a method that
