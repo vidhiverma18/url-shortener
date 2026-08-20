@@ -1,0 +1,27 @@
+spring:
+  jpa:
+    hibernate:
+      ddl-auto: validate
+  data:
+    redis:
+      # Deliberately pointed at a dead port. Integration tests therefore exercise the
+      # cache- and rate-limiter-unavailable paths on every run, which is the failure
+      # mode most likely to occur in production and the least likely to be tested.
+      host: localhost
+      port: 63999
+      timeout: 50ms
+      connect-timeout: 50ms
+
+shortener:
+  base-url: http://localhost:8080
+  code-secret: test-secret
+  analytics:
+    # Effectively disables the scheduled flush so tests drive it explicitly. A timer
+    # racing the assertions produced exactly the kind of intermittent failure that
+    # teaches people to re-run the suite instead of reading it.
+    flush-interval-ms: 3600000
+
+logging:
+  level:
+    com.example.shortener: WARN
+    org.springframework.web: WARN
